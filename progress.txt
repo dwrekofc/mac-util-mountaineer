@@ -8,6 +8,10 @@
 - User not in admin group — install to ~/Applications/ instead of /Applications/
 - `cp -R` to overwrite existing .app bundles; don't try to rm -rf first (macOS xattr issues)
 - bundle-macos.sh creates the .app structure: Contents/{MacOS,Resources,Info.plist}
+- SCDynamicStore network monitor: use SCDynamicStoreBuilder with callback_context, watch State:/Network/Interface/.*/IPv4 etc., create_run_loop_source + CFRunLoop::run_current() on dedicated thread
+- SCDynamicStore callback is `fn` (bare function pointer), NOT `Fn`/closure — pass state via the `info: T` field in SCDynamicStoreCallBackContext
+- Bridge SCDynamicStore events to GPUI: use std::sync::mpsc channel — tx in callback, rx polled by GPUI async task via try_recv()
+- core-foundation crate needed for CFRunLoop/CFArray/CFString when using SCDynamicStore directly (not re-exported by system-configuration)
 - system-configuration crate: `get_interfaces()` returns CFArray<SCNetworkInterface>, use `.interface_type()` for SCNetworkInterfaceType (Ethernet vs IEEE80211=WiFi)
 - nix crate `getifaddrs()` for IP addresses — use `.as_sockaddr_in()` / `.as_sockaddr_in6()` to extract IPs
 - nix 0.30 already transitive dep from gpui→command-fds; just add `features = ["net"]` to enable getifaddrs
@@ -81,4 +85,29 @@
   - set_global must be called inside the Application::run closure (needs &mut App)
   - Dead code warnings are expected for new types not yet consumed — they'll go away as mount/reconcile code uses them
   - User not in admin group: install to ~/Applications/ not /Applications/
+---
+
+[2026-02-11 23:59] - [Network] SCDynamicStore change monitor (bd-1m4)
+
+- Implemented: Real-time network change detection via SCDynamicStore, bridged to GPUI main thread
+  - Created network/monitor.rs with SCDynamicStore listener on dedicated background thread
+  - Watches 5 key patterns: Interface/*/IPv4, Interface/*/IPv6, Interface/*/Link, Global/IPv4, Global/IPv6
+  - Background thread runs its own CFRunLoop (required for SCDynamicStore callbacks)
+  - Callback sends NetworkChangeEvent (with changed key names) via mpsc::Sender
+  - GPUI async task in main.rs polls mpsc::Receiver every 200ms via try_recv()
+  - On change, re-enumerates interfaces and logs UP/DOWN status for each
+  - 1 new test: monitor_starts_and_returns_receiver
+- Files changed:
+  - Created: crates/mountaineer/src/network/monitor.rs
+  - Modified: crates/mountaineer/src/network/mod.rs (added pub mod monitor, re-export NetworkChangeEvent)
+  - Modified: crates/mountaineer/src/main.rs (added start_network_monitor() function, Duration import)
+  - Modified: Cargo.toml (added core-foundation = "0.9" workspace dep)
+  - Modified: crates/mountaineer/Cargo.toml (added core-foundation.workspace = true)
+- Learnings:
+  - SCDynamicStoreCallBackT<T> is `fn`, not `Fn` — you cannot use closures. The `info: T` field is the mechanism for passing mutable state (e.g., mpsc::Sender)
+  - SCDynamicStore + CFRunLoop must be created on the same thread that runs the run loop — build the store inside thread::spawn, not before
+  - core-foundation crate is needed for CFRunLoop, CFArray<CFString>, kCFRunLoopCommonModes; system-configuration only re-exports SCDynamicStore types
+  - kCFRunLoopCommonModes requires `unsafe` block to access (it's a raw CFStringRef)
+  - thread::Builder::new().name("network-monitor") makes debug logs/backtraces more readable than bare thread::spawn
+  - /Applications/ requires admin group; user installs to ~/Applications/
 ---
