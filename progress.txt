@@ -12,6 +12,7 @@
 - nix crate `getifaddrs()` for IP addresses — use `.as_sockaddr_in()` / `.as_sockaddr_in6()` to extract IPs
 - nix 0.30 already transitive dep from gpui→command-fds; just add `features = ["net"]` to enable getifaddrs
 - Combine system-configuration (type detection) + nix getifaddrs (IP retrieval) by matching on BSD interface name
+- GPUI Global pattern: `impl Global for T {}`, register with `cx.set_global(T::new())`, access via `cx.global::<T>()` / `cx.global_mut::<T>()`
 
 ---
 
@@ -59,4 +60,25 @@
   - nix::ifaddrs::InterfaceAddress has .address as Option<SockaddrStorage>; use .as_sockaddr_in() / .as_sockaddr_in6() to extract
   - SockaddrIn has .ip() method returning Ipv4Addr directly (no manual conversion needed)
 - Also closed: bd-164 (scaffold bundle config) and bd-3b8 (Info.plist) — already done from tray icon work
+---
+
+[2026-02-11 23:49] - [Mount] AppState global (bd-28j)
+
+- Implemented: Central AppState with core mount types, registered as GPUI Global
+  - Created app_state.rs with DriveId, DriveConfig, DriveStatus, AdhocMount, AppState
+  - DriveId: UUID newtype wrapper with Serialize/Deserialize
+  - DriveConfig: full SMB drive config (hostname, ethernet IP, share, username, mount point, enabled)
+  - DriveStatus: enum with Disconnected, Mounting, Connected{via,ip}, Reconnecting{from,to}, Error(String)
+  - AdhocMount: one-off mount for discovered shares (not persisted)
+  - AppState: HashMap<DriveId, DriveConfig/DriveStatus> + Vec<AdhocMount>, implements GPUI Global
+  - Registered via cx.set_global(AppState::new()) in main.rs before tray::install
+  - 4 unit tests: DriveId uniqueness, DriveStatus display, AppState empty default, DriveConfig serde roundtrip
+- Files changed:
+  - Created: crates/mountaineer/src/app_state.rs
+  - Modified: crates/mountaineer/src/main.rs (added mod app_state, use AppState, cx.set_global)
+- Learnings:
+  - GPUI Global trait: `impl Global for AppState {}` — then `cx.set_global()`, `cx.global::<AppState>()`, `cx.global_mut::<AppState>()`
+  - set_global must be called inside the Application::run closure (needs &mut App)
+  - Dead code warnings are expected for new types not yet consumed — they'll go away as mount/reconcile code uses them
+  - User not in admin group: install to ~/Applications/ not /Applications/
 ---
