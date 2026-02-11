@@ -21,6 +21,7 @@ dirs = "5"
 uuid = { version = "1", features = ["v4"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1.0"
+nix = { version = "0.30", features = ["net"] }
 
 [patch.crates-io]
 zed-font-kit = { git = "https://github.com/zed-industries/font-kit", rev = "110523127440aefb11ce0cf280ae7c5071337ec5" }

@@ -3829,6 +3829,7 @@ dependencies = [
  "gpui-component-assets",
  "log",
  "mdns-sd",
+ "nix 0.30.1",
  "security-framework",
  "serde",
  "serde_json",
@@ -3930,6 +3931,7 @@ dependencies = [
  "cfg-if",
  "cfg_aliases",
  "libc",
+ "memoffset",
 ]
 
 [[package]]

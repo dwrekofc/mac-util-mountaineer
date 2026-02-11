@@ -8,6 +8,10 @@
 - User not in admin group — install to ~/Applications/ instead of /Applications/
 - `cp -R` to overwrite existing .app bundles; don't try to rm -rf first (macOS xattr issues)
 - bundle-macos.sh creates the .app structure: Contents/{MacOS,Resources,Info.plist}
+- system-configuration crate: `get_interfaces()` returns CFArray<SCNetworkInterface>, use `.interface_type()` for SCNetworkInterfaceType (Ethernet vs IEEE80211=WiFi)
+- nix crate `getifaddrs()` for IP addresses — use `.as_sockaddr_in()` / `.as_sockaddr_in6()` to extract IPs
+- nix 0.30 already transitive dep from gpui→command-fds; just add `features = ["net"]` to enable getifaddrs
+- Combine system-configuration (type detection) + nix getifaddrs (IP retrieval) by matching on BSD interface name
 
 ---
 
@@ -30,4 +34,29 @@
   - MenuEvent::receiver() returns a &'static Receiver — clone it before moving into async block
   - tray-icon 0.19 requires tray icon creation on main thread (macOS MainThreadMarker enforced)
   - The GPUI run closure runs on main thread, so creating TrayIcon there is correct
+---
+
+[2026-02-11 17:32] - [Network] Interface enumeration (bd-3ts)
+
+- Implemented: Network interface enumeration module with type classification and IP retrieval
+  - Created network/mod.rs and network/interface.rs
+  - InterfaceType enum (Ethernet, WiFi, Other) with Display, sorting priority
+  - NetworkInterface struct with name, type, display_name, ipv4/ipv6 addresses
+  - enumerate_interfaces() combines system-configuration (type detection) and nix getifaddrs (IP extraction)
+  - Filters to only Ethernet/WiFi interfaces with at least one IP address
+  - Sorts Ethernet before WiFi for priority ordering
+  - 5 unit tests covering type filtering, IP presence, sort order, display format
+- Files changed:
+  - Created: crates/mountaineer/src/network/mod.rs
+  - Created: crates/mountaineer/src/network/interface.rs
+  - Modified: crates/mountaineer/src/main.rs (added mod network)
+  - Modified: Cargo.toml (added nix workspace dep with "net" feature)
+  - Modified: crates/mountaineer/Cargo.toml (added nix.workspace = true)
+- Learnings:
+  - nix 0.30 was already a transitive dep (from command-fds via gpui); adding features=["net"] just enables the getifaddrs module without pulling a new version
+  - SCNetworkInterfaceType::IEEE80211 is WiFi (not "WiFi" or "AirPort")
+  - system-configuration returns ALL interfaces (including inactive); must cross-reference with getifaddrs to find which have IPs
+  - nix::ifaddrs::InterfaceAddress has .address as Option<SockaddrStorage>; use .as_sockaddr_in() / .as_sockaddr_in6() to extract
+  - SockaddrIn has .ip() method returning Ipv4Addr directly (no manual conversion needed)
+- Also closed: bd-164 (scaffold bundle config) and bd-3b8 (Info.plist) — already done from tray icon work
 ---

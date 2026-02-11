@@ -25,3 +25,4 @@ dirs.workspace = true
 uuid.workspace = true
 clap.workspace = true
 anyhow.workspace = true
+nix.workspace = true
