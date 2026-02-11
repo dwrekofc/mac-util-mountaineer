@@ -1,0 +1,33 @@
+## Codebase Patterns
+
+- GPUI spawn uses async closure syntax: `cx.spawn(async move |cx: &mut AsyncApp| { ... })` — NOT `|cx| async move { ... }`
+- tray-icon TrayIcon must be kept alive (use `std::mem::forget`) or the tray icon disappears
+- tray-icon re-exports muda under `tray_icon::menu::*` — no need to depend on muda separately
+- MenuEvent/TrayIconEvent use crossbeam channels: clone the receiver, then `try_recv()` in a polling loop
+- macOS app bundles: `LSUIElement = true` in Info.plist makes a menu-bar-only app (no Dock icon)
+- User not in admin group — install to ~/Applications/ instead of /Applications/
+- `cp -R` to overwrite existing .app bundles; don't try to rm -rf first (macOS xattr issues)
+- bundle-macos.sh creates the .app structure: Contents/{MacOS,Resources,Info.plist}
+
+---
+
+[2026-02-11 15:19] - [Scaffold] Tray icon + placeholder menu (bd-dab)
+
+- Implemented: macOS tray icon with placeholder menu and working Quit
+  - Created tray.rs with install() and start_event_polling() functions
+  - TrayIconBuilder with title "⛰" and menu (Mountaineer label, separator, Quit)
+  - Async polling loop at 100ms using GPUI spawn + background_executor timer
+  - Quit menu item matched by MenuId, calls cx.quit()
+  - Created scripts/bundle-macos.sh for building macOS .app bundles
+- Files changed:
+  - Created: crates/mountaineer/src/tray.rs
+  - Modified: crates/mountaineer/src/main.rs (added mod tray + tray::install call)
+  - Created: scripts/bundle-macos.sh
+- Learnings:
+  - GPUI's App::spawn takes AsyncFnOnce(&mut AsyncApp) — must use `async move |cx: &mut AsyncApp|` syntax (Rust 1.85+ async closures), NOT `|cx: &mut AsyncApp| async move`
+  - The old closure-returning-future pattern causes lifetime errors with the borrowed AsyncApp
+  - `cx.update(|cx: &mut App| cx.quit())` returns `()` not Result — don't call .ok() on it
+  - MenuEvent::receiver() returns a &'static Receiver — clone it before moving into async block
+  - tray-icon 0.19 requires tray icon creation on main thread (macOS MainThreadMarker enforced)
+  - The GPUI run closure runs on main thread, so creating TrayIcon there is correct
+---
