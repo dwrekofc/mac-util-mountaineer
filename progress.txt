@@ -5,7 +5,10 @@
 - tray-icon re-exports muda under `tray_icon::menu::*` — no need to depend on muda separately
 - MenuEvent/TrayIconEvent use crossbeam channels: clone the receiver, then `try_recv()` in a polling loop
 - macOS app bundles: `LSUIElement = true` in Info.plist makes a menu-bar-only app (no Dock icon)
-- User not in admin group — install to ~/Applications/ instead of /Applications/
+- User not in admin group — install to ~/Applications/ instead of /Applications/ (CLAUDE.md says /Applications but that's wrong)
+- mount_smbfs: use -N flag to suppress password prompt when credentials are in URL
+- SMB URL format: //user:pass@server/share — percent-encode user/pass for special chars (@, :, /, %, space, etc.)
+- unmount strategy: diskutil unmount force first, then umount -f as fallback
 - `cp -R` to overwrite existing .app bundles; don't try to rm -rf first (macOS xattr issues)
 - bundle-macos.sh creates the .app structure: Contents/{MacOS,Resources,Info.plist}
 - SCDynamicStore network monitor: use SCDynamicStoreBuilder with callback_context, watch State:/Network/Interface/.*/IPv4 etc., create_run_loop_source + CFRunLoop::run_current() on dedicated thread
@@ -113,4 +116,26 @@
   - Live test confirmed: toggling WiFi off/on produces ~12 events in sequence (Link, IPv4, IPv6, Global for both down and up)
   - awdl0/Link events fire as side effect of WiFi toggle (Apple Wireless Direct Link for AirDrop) — correctly filtered out by enumerate_interfaces() since we only report Ethernet/WiFi
   - Multiple rapid events are expected per state change — the reconcile engine should debounce or batch these
+---
+
+[2026-02-12 00:08] - [Mount] SMB mount/unmount shell wrappers (bd-2ov, bd-211, bd-34o)
+
+- Implemented: mount/smb.rs with mount() and unmount() functions
+  - mount(): shells out to mount_smbfs -N //user:pass@server/share /mount/point
+  - unmount(): tries diskutil unmount force, falls back to umount -f
+  - MountParams struct for clean API surface
+  - MountError enum with CreateMountPoint, MountFailed, UnmountFailed, CommandSpawn variants
+  - encode_url_component() for percent-encoding username/password in SMB URLs
+  - build_smb_url() helper (pub(crate) for future use by reconcile engine)
+  - Creates mount point directory if it doesn't exist
+  - 6 unit tests: URL encoding, URL building, error display formatting
+- Files changed:
+  - Created: crates/mountaineer/src/mount/mod.rs
+  - Created: crates/mountaineer/src/mount/smb.rs
+  - Modified: crates/mountaineer/src/main.rs (added mod mount)
+- Learnings:
+  - mount_smbfs -N flag: suppresses interactive password prompt; credentials must be in the URL
+  - Percent-encoding is important for passwords with @, :, /, %, space — mount_smbfs parses the URL and these would break the format
+  - diskutil unmount force vs umount -f: diskutil is preferred on macOS (handles APFS/HFS+ cleanly) but umount -f works as fallback for edge cases
+  - /Applications/ requires admin group membership; user installs to ~/Applications/
 ---

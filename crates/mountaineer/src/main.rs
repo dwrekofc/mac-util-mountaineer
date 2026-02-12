@@ -4,6 +4,7 @@ use gpui::*;
 use gpui_component_assets::Assets;
 
 mod app_state;
+mod mount;
 mod network;
 mod tray;
 
