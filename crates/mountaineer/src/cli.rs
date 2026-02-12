@@ -45,4 +45,8 @@ pub enum Command {
     },
     /// Watch mode: auto-mount favorites, remount on network changes
     Watch,
+    /// Install LaunchAgent to start Mountaineer at login
+    Install,
+    /// Uninstall LaunchAgent (stop starting at login)
+    Uninstall,
 }

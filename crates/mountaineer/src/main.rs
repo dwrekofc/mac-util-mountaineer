@@ -7,6 +7,7 @@ mod cli;
 mod config;
 mod discovery;
 mod gui;
+mod launchd;
 mod mount;
 mod network;
 mod tray;
@@ -39,6 +40,8 @@ fn run_cli(command: Command) -> Result<()> {
         Command::Status => cmd_status(),
         Command::Wake { share } => cmd_wake(&share),
         Command::Watch => cmd_watch(),
+        Command::Install => cmd_install(),
+        Command::Uninstall => cmd_uninstall(),
     }
 }
 
@@ -334,4 +337,19 @@ fn cmd_wake(share_name: &str) -> Result<()> {
 
 fn cmd_watch() -> Result<()> {
     watcher::run()
+}
+
+fn cmd_install() -> Result<()> {
+    if launchd::is_installed() {
+        println!("LaunchAgent is already installed. Reinstalling...");
+    }
+    launchd::install()?;
+    println!("LaunchAgent installed. Mountaineer will start automatically at login.");
+    Ok(())
+}
+
+fn cmd_uninstall() -> Result<()> {
+    launchd::uninstall()?;
+    println!("LaunchAgent removed. Mountaineer will no longer start at login.");
+    Ok(())
 }
