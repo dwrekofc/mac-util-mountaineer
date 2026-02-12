@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 #[command(name = "mountaineer", about = "SMB share favorites manager", version)]
 pub struct Cli {
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 #[derive(Subcommand)]

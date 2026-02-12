@@ -1,11 +1,15 @@
+#![allow(unexpected_cfgs)]
+
 use anyhow::Result;
 use clap::Parser;
 
 mod cli;
 mod config;
 mod discovery;
+mod gui;
 mod mount;
 mod network;
+mod tray;
 mod watcher;
 mod wol;
 
@@ -16,6 +20,16 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        None => {
+            gui::run();
+            Ok(())
+        }
+        Some(cmd) => run_cli(cmd),
+    }
+}
+
+fn run_cli(command: Command) -> Result<()> {
+    match command {
         Command::List => cmd_list(),
         Command::Favorites => cmd_favorites(),
         Command::Add { share, mac } => cmd_add(&share, mac),
