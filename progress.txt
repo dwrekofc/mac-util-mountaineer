@@ -22,6 +22,7 @@
 - nix 0.30 already transitive dep from gpui→command-fds; just add `features = ["net"]` to enable getifaddrs
 - Combine system-configuration (type detection) + nix getifaddrs (IP retrieval) by matching on BSD interface name
 - GPUI Global pattern: `impl Global for T {}`, register with `cx.set_global(T::new())`, access via `cx.global::<T>()` / `cx.global_mut::<T>()`
+- tray-icon Submenu: `Submenu::new(label, enabled)`, append items/separators to it, then `menu.append(&submenu)` — submenu appears as a flyout
 - Reconcile pattern: separate pure decision logic (plan_reconcile) from I/O execution (reconcile_drive) for testability
 - InterfaceType::cmp_priority() is pub(crate) — used by reconcile engine to compare interface priority
 - When iterating AppState drives + updating statuses: clone DriveConfig and collect DriveIds first to avoid borrow conflicts with HashMap
@@ -194,4 +195,25 @@
   - font-kit patch still required: `[patch.crates-io] zed-font-kit = { git = "...", rev = "110523..." }`
   - LaunchAgent plist: ProgramArguments points to .app/Contents/MacOS/Mountaineer (no args = GUI mode). launchctl load/unload for immediate activation
   - Closed 15+ over-scoped sub-tasks (IPC, mDNS, Network Browser, Dashboard, Settings) that belonged to future epics
+---
+
+[2026-02-12 22:45] - [Tray] Add/Remove favorites from Manage Favorites submenu
+
+- Implemented: "Manage Favorites" submenu in tray menu for adding/removing favorites without CLI
+  - New TraySnapshot struct: combines favorite statuses + addable (mounted-but-not-favorited) shares in single discovery call
+  - Refactored snapshot_statuses() → snapshot(): returns TraySnapshot with both favorites and addable fields
+  - Submenu shows "Add SHARE (server)" for non-favorited mounted shares, separator, "Remove SHARE" for all favorites
+  - Submenu hidden when no actions available (no favorites and no mounted shares)
+  - add_share_to_favorites(): mirrors CLI cmd_add — loads config, dedup check, finds mount_point, discovers MAC, saves
+  - remove_share_from_favorites(): mirrors CLI cmd_remove — loads config, retain filter, saves
+  - Menu IDs use colon delimiter (fav-add:server:share) since colons can't appear in hostnames/share names
+  - Actions run in spawned threads; existing 3s post-action refresh handles menu rebuild
+  - Derived PartialEq on TraySnapshot for staleness check in polling loop
+- Files changed:
+  - Modified: crates/mountaineer/src/tray.rs (only file changed)
+- Learnings:
+  - tray_icon::menu::Submenu::new(label, enabled) creates a submenu; append items to it, then append the Submenu to the parent Menu
+  - Menu ID parsing with split_once(':') is clean for extracting server:share from prefixed IDs
+  - Refactoring to return extra data from an existing function (snapshot_statuses → snapshot returning TraySnapshot) avoids duplicate discovery calls
+  - Config operations (load/save) are fast enough to run in spawned threads without blocking the GPUI polling loop
 ---

@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use gpui::*;
-use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::{Icon, TrayIconBuilder};
 
 use crate::{config, discovery, mount, wol};
@@ -17,19 +17,21 @@ struct FavoriteStatus {
     mac_address: Option<String>,
 }
 
-/// Build a snapshot of favorite statuses by checking mounts and reachability.
-fn snapshot_statuses() -> Vec<FavoriteStatus> {
-    let cfg = match config::load() {
-        Ok(c) => c,
-        Err(e) => {
-            log::error!("Failed to load config: {}", e);
-            return Vec::new();
-        }
-    };
+/// Snapshot of tray state: favorite statuses and addable mounted shares.
+#[derive(Clone, Debug, PartialEq)]
+struct TraySnapshot {
+    favorites: Vec<FavoriteStatus>,
+    /// Mounted shares not already in favorites: (share, server).
+    addable: Vec<(String, String)>,
+}
 
+/// Build a snapshot of favorite statuses and addable shares in one pass.
+fn snapshot() -> TraySnapshot {
+    let cfg = config::load().unwrap_or_default();
     let mounted = discovery::discover_mounted_shares();
 
-    cfg.favorites
+    let favorites = cfg
+        .favorites
         .iter()
         .map(|fav| {
             let connected = mounted.iter().any(|m| {
@@ -45,11 +47,24 @@ fn snapshot_statuses() -> Vec<FavoriteStatus> {
                 mac_address: fav.mac_address.clone(),
             }
         })
-        .collect()
+        .collect();
+
+    let addable = mounted
+        .into_iter()
+        .filter(|m| {
+            !cfg.favorites.iter().any(|f| {
+                f.share.eq_ignore_ascii_case(&m.share)
+                    && f.server.eq_ignore_ascii_case(&m.server)
+            })
+        })
+        .map(|m| (m.share, m.server))
+        .collect();
+
+    TraySnapshot { favorites, addable }
 }
 
-/// Build the tray menu from current favorite statuses.
-fn build_menu(statuses: &[FavoriteStatus]) -> Menu {
+/// Build the tray menu from a snapshot.
+fn build_menu(snap: &TraySnapshot) -> Menu {
     let menu = Menu::new();
 
     // Title item (disabled)
@@ -57,11 +72,11 @@ fn build_menu(statuses: &[FavoriteStatus]) -> Menu {
     let _ = menu.append(&title);
     let _ = menu.append(&PredefinedMenuItem::separator());
 
-    if statuses.is_empty() {
+    if snap.favorites.is_empty() {
         let empty = MenuItem::with_id("empty", "No favorites configured", false, None);
         let _ = menu.append(&empty);
     } else {
-        for status in statuses {
+        for status in &snap.favorites {
             let icon = if status.connected { "●" } else { "○" };
             let state = if status.connected {
                 "Connected"
@@ -83,6 +98,33 @@ fn build_menu(statuses: &[FavoriteStatus]) -> Menu {
 
     let wake_all = MenuItem::with_id("wake-all", "Wake All Servers", true, None);
     let _ = menu.append(&wake_all);
+
+    // Manage Favorites submenu
+    if !snap.addable.is_empty() || !snap.favorites.is_empty() {
+        let submenu = Submenu::new("Manage Favorites", true);
+        for (share, server) in &snap.addable {
+            let item = MenuItem::with_id(
+                format!("fav-add:{}:{}", server, share),
+                format!("Add {} ({})", share, server),
+                true,
+                None,
+            );
+            let _ = submenu.append(&item);
+        }
+        if !snap.addable.is_empty() && !snap.favorites.is_empty() {
+            let _ = submenu.append(&PredefinedMenuItem::separator());
+        }
+        for status in &snap.favorites {
+            let item = MenuItem::with_id(
+                format!("fav-remove:{}:{}", status.server, status.share),
+                format!("Remove {}", status.share),
+                true,
+                None,
+            );
+            let _ = submenu.append(&item);
+        }
+        let _ = menu.append(&submenu);
+    }
 
     let _ = menu.append(&PredefinedMenuItem::separator());
 
@@ -120,8 +162,8 @@ fn make_icon() -> Icon {
 
 /// Install the tray icon and start background event/status loops.
 pub fn install(cx: &mut App) {
-    let statuses = snapshot_statuses();
-    let menu = build_menu(&statuses);
+    let snap = snapshot();
+    let menu = build_menu(&snap);
 
     let tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
@@ -136,7 +178,10 @@ pub fn install(cx: &mut App) {
     // Single GPUI async task owns the tray icon (TrayIcon is !Send, must stay on main thread)
     cx.spawn(async move |cx: &mut AsyncApp| {
         let menu_receiver = MenuEvent::receiver();
-        let mut prev_statuses: Vec<FavoriteStatus> = Vec::new();
+        let mut prev_snap = TraySnapshot {
+            favorites: Vec::new(),
+            addable: Vec::new(),
+        };
         let mut last_status_check = std::time::Instant::now();
         let status_interval = Duration::from_secs(30);
 
@@ -151,13 +196,13 @@ pub fn install(cx: &mut App) {
                     return;
                 }
 
-                // Refresh after action (small delay for mount to complete)
+                // Refresh after action (small delay for mount/config to complete)
                 cx.background_executor()
                     .timer(Duration::from_secs(3))
                     .await;
-                let statuses = snapshot_statuses();
-                tray.set_menu(Some(Box::new(build_menu(&statuses))));
-                prev_statuses = statuses;
+                let snap = snapshot();
+                tray.set_menu(Some(Box::new(build_menu(&snap))));
+                prev_snap = snap;
             }
 
             // Check network events (non-blocking)
@@ -169,11 +214,11 @@ pub fn install(cx: &mut App) {
             // Periodic status check or network-triggered refresh
             let now = std::time::Instant::now();
             if network_changed || now.duration_since(last_status_check) >= status_interval {
-                let new_statuses = snapshot_statuses();
-                if new_statuses != prev_statuses {
+                let new_snap = snapshot();
+                if new_snap != prev_snap {
                     log::debug!("Status changed, refreshing tray menu");
-                    tray.set_menu(Some(Box::new(build_menu(&new_statuses))));
-                    prev_statuses = new_statuses;
+                    tray.set_menu(Some(Box::new(build_menu(&new_snap))));
+                    prev_snap = new_snap;
                 }
                 last_status_check = now;
             }
@@ -212,7 +257,95 @@ fn handle_menu_event(id: &str) {
             let share_name = &id[5..];
             open_share_in_finder(share_name);
         }
+        id if id.starts_with("fav-add:") => {
+            if let Some((server, share)) = id["fav-add:".len()..].split_once(':') {
+                let server = server.to_string();
+                let share = share.to_string();
+                std::thread::spawn(move || add_share_to_favorites(&server, &share));
+            }
+        }
+        id if id.starts_with("fav-remove:") => {
+            if let Some((server, share)) = id["fav-remove:".len()..].split_once(':') {
+                let server = server.to_string();
+                let share = share.to_string();
+                std::thread::spawn(move || remove_share_from_favorites(&server, &share));
+            }
+        }
         _ => {}
+    }
+}
+
+/// Add a mounted share to favorites (mirrors CLI cmd_add logic).
+fn add_share_to_favorites(server: &str, share: &str) {
+    let mut cfg = match config::load() {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("Failed to load config: {}", e);
+            return;
+        }
+    };
+
+    // Already a favorite — nothing to do
+    if cfg.favorites.iter().any(|f| {
+        f.share.eq_ignore_ascii_case(share) && f.server.eq_ignore_ascii_case(server)
+    }) {
+        log::warn!("{} on {} is already a favorite", share, server);
+        return;
+    }
+
+    // Find in currently mounted shares to get mount_point
+    let mounted = discovery::discover_mounted_shares();
+    let found = mounted.iter().find(|m| {
+        m.share.eq_ignore_ascii_case(share) && m.server.eq_ignore_ascii_case(server)
+    });
+
+    let mount_point = match found {
+        Some(m) => m.mount_point.clone(),
+        None => {
+            log::error!("{} on {} is no longer mounted", share, server);
+            return;
+        }
+    };
+
+    let mac_address = discovery::discover_mac_address(server);
+
+    let fav = config::Favorite {
+        server: server.to_string(),
+        share: share.to_string(),
+        mount_point,
+        mac_address,
+    };
+
+    log::info!("Adding favorite: {} on {}", fav.share, fav.server);
+    cfg.favorites.push(fav);
+    if let Err(e) = config::save(&cfg) {
+        log::error!("Failed to save config: {}", e);
+    }
+}
+
+/// Remove a share from favorites (mirrors CLI cmd_remove logic).
+fn remove_share_from_favorites(server: &str, share: &str) {
+    let mut cfg = match config::load() {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("Failed to load config: {}", e);
+            return;
+        }
+    };
+
+    let before = cfg.favorites.len();
+    cfg.favorites.retain(|f| {
+        !(f.share.eq_ignore_ascii_case(share) && f.server.eq_ignore_ascii_case(server))
+    });
+
+    if cfg.favorites.len() == before {
+        log::warn!("{} on {} not found in favorites", share, server);
+        return;
+    }
+
+    log::info!("Removed favorite: {} on {}", share, server);
+    if let Err(e) = config::save(&cfg) {
+        log::error!("Failed to save config: {}", e);
     }
 }
 
