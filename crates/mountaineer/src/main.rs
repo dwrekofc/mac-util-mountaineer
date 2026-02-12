@@ -1,124 +1,323 @@
-use std::time::Duration;
+use anyhow::Result;
+use clap::Parser;
 
-use gpui::*;
-use gpui_component_assets::Assets;
-
-mod app_state;
+mod cli;
+mod config;
+mod discovery;
 mod mount;
 mod network;
-mod tray;
+mod watcher;
+mod wol;
 
-use app_state::{AppState, DriveConfig, DriveId};
+use cli::{Cli, Command};
 
-fn main() {
+fn main() -> Result<()> {
     env_logger::init();
-    log::info!("Mountaineer starting");
+    let cli = Cli::parse();
 
-    Application::new().with_assets(Assets).run(|cx: &mut App| {
-        gpui_component::init(cx);
-
-        // Central app state — accessible everywhere via cx.global::<AppState>()
-        cx.set_global(AppState::new());
-
-        // Hardcoded test drive for development — remove once config loading is implemented (bd-157).
-        add_test_drive(cx);
-
-        tray::install(cx);
-        start_network_monitor(cx);
-
-        // Initial reconcile — run synchronously during startup.
-        // (cx.defer doesn't tick in a windowless menu-bar app.)
-        log::info!("Initial reconcile on startup");
-        let interfaces = network::enumerate_interfaces();
-        let state = cx.global_mut::<AppState>();
-        mount::manager::reconcile_all(state, &interfaces);
-
-        log::info!("GPUI app running");
-    });
+    match cli.command {
+        Command::List => cmd_list(),
+        Command::Favorites => cmd_favorites(),
+        Command::Add { share, mac } => cmd_add(&share, mac),
+        Command::Remove { share } => cmd_remove(&share),
+        Command::Mount { share } => cmd_mount(share.as_deref()),
+        Command::Unmount { share } => cmd_unmount(&share),
+        Command::Status => cmd_status(),
+        Command::Wake { share } => cmd_wake(&share),
+        Command::Watch => cmd_watch(),
+    }
 }
 
-/// Start the network change monitor and bridge events to the GPUI main thread.
-///
-/// Spawns a background SCDynamicStore listener (via `network::monitor::start()`)
-/// and a GPUI async task that polls the receiver. On each network change event,
-/// re-enumerates interfaces and logs transitions.
-fn start_network_monitor(cx: &App) {
-    let network_rx = network::monitor::start();
-
-    cx.spawn(async move |cx: &mut AsyncApp| {
-        loop {
-            cx.background_executor()
-                .timer(Duration::from_millis(200))
-                .await;
-
-            // Drain all queued events into a batch.
-            let mut had_events = false;
-            while let Ok(event) = network_rx.try_recv() {
-                log::info!("Network change: {:?}", event.changed_keys);
-                had_events = true;
-            }
-
-            if had_events {
-                // Debounce: wait for events to settle, then drain stragglers.
-                cx.background_executor()
-                    .timer(Duration::from_millis(500))
-                    .await;
-                while let Ok(event) = network_rx.try_recv() {
-                    log::info!("Network change (settling): {:?}", event.changed_keys);
-                }
-
-                // Reconcile once for the entire batch.
-                let _ = cx.update(|cx: &mut App| {
-                    let interfaces = network::enumerate_interfaces();
-                    if interfaces.is_empty() {
-                        log::warn!("No active network interfaces");
-                    } else {
-                        for iface in &interfaces {
-                            let status = if iface.is_active() { "UP" } else { "DOWN" };
-                            log::info!("  [{}] {}", status, iface);
-                        }
-                    }
-
-                    let state = cx.global_mut::<AppState>();
-                    mount::manager::reconcile_all(state, &interfaces);
-                });
-            }
-        }
-    })
-    .detach();
-}
-
-/// Hardcoded test drive for development — remove once config loading is implemented (bd-157).
-///
-/// Set the SMB password via the `SMB_PASSWORD` environment variable:
-///   SMB_PASSWORD=yourpassword cargo run
-fn add_test_drive(cx: &mut App) {
-    let password = std::env::var("SMB_PASSWORD").unwrap_or_default();
-    if password.is_empty() {
-        log::warn!("SMB_PASSWORD not set — test drive mount will fail on auth");
+fn cmd_list() -> Result<()> {
+    let shares = discovery::discover_mounted_shares();
+    if shares.is_empty() {
+        println!("No SMB shares currently mounted.");
+        return Ok(());
     }
 
-    // Use ~/Mounts/ instead of /Volumes/ — macOS SIP prevents regular users
-    // from creating directories in /Volumes/ after an unmount removes them.
-    let mount_base = dirs::home_dir()
-        .expect("no home directory")
-        .join("Mounts");
+    // Print header
+    println!(
+        "{:<14} {:<20} {:<24} {:<30} {}",
+        "SHARE", "SERVER", "MOUNT POINT", "INTERFACE", "SMB VERSION"
+    );
 
-    let drive = DriveConfig {
-        id: DriveId::new(),
-        label: "Mac Mini CORE-01".into(),
-        server_hostname: "macmini.local".into(),
-        server_ethernet_ip: Some("192.168.50.146".parse().unwrap()),
-        share_name: "CORE-01".into(),
-        username: "dskinnell".into(),
-        mount_point: mount_base.join("CORE-01"),
-        enabled: true,
+    for s in &shares {
+        let iface_str = match (&s.interface, &s.interface_label) {
+            (Some(iface), Some(label)) => format!("{} ({})", iface, label),
+            (Some(iface), None) => iface.clone(),
+            _ => "—".to_string(),
+        };
+        let smb_ver = s.smb_version.as_deref().unwrap_or("—");
+
+        println!(
+            "{:<14} {:<20} {:<24} {:<30} {}",
+            s.share, s.server, s.mount_point, iface_str, smb_ver
+        );
+    }
+
+    Ok(())
+}
+
+fn cmd_favorites() -> Result<()> {
+    let cfg = config::load()?;
+    if cfg.favorites.is_empty() {
+        println!("No favorites configured. Use 'mountaineer add <SHARE>' to add one.");
+        return Ok(());
+    }
+
+    let mounted = discovery::discover_mounted_shares();
+
+    println!(
+        "{:<14} {:<20} {:<24} {}",
+        "SHARE", "SERVER", "MOUNT POINT", "STATUS"
+    );
+
+    for fav in &cfg.favorites {
+        let is_mounted = mounted.iter().any(|m| {
+            m.share.eq_ignore_ascii_case(&fav.share)
+                && m.server.eq_ignore_ascii_case(&fav.server)
+        });
+        let status = if is_mounted { "● Mounted" } else { "○ Offline" };
+
+        println!(
+            "{:<14} {:<20} {:<24} {}",
+            fav.share, fav.server, fav.mount_point, status
+        );
+    }
+
+    Ok(())
+}
+
+fn cmd_add(share_name: &str, mac_override: Option<String>) -> Result<()> {
+    let mut cfg = config::load()?;
+
+    // Check if already in favorites
+    if cfg
+        .favorites
+        .iter()
+        .any(|f| f.share.eq_ignore_ascii_case(share_name))
+    {
+        anyhow::bail!("'{}' is already in favorites", share_name);
+    }
+
+    // Find the share in currently mounted shares
+    let mounted = discovery::discover_mounted_shares();
+    let found = mounted
+        .iter()
+        .find(|m| m.share.eq_ignore_ascii_case(share_name));
+
+    let (server, mount_point) = match found {
+        Some(m) => (m.server.clone(), m.mount_point.clone()),
+        None => {
+            anyhow::bail!(
+                "'{}' is not currently mounted. Mount it first, then run 'mountaineer add {}'.",
+                share_name,
+                share_name
+            );
+        }
     };
 
-    let id = drive.id;
-    let state = cx.global_mut::<AppState>();
-    state.drives.insert(id, drive);
-    state.passwords.insert(id, password);
+    // Discover MAC address
+    let mac_address = mac_override.or_else(|| {
+        log::info!("Discovering MAC address for {}...", server);
+        discovery::discover_mac_address(&server)
+    });
 
-    log::info!("Added test drive: Mac Mini CORE-01");
+    let fav = config::Favorite {
+        server,
+        share: share_name.to_string(),
+        mount_point,
+        mac_address: mac_address.clone(),
+    };
+
+    println!("Adding to favorites:");
+    println!("  Share:       {}", fav.share);
+    println!("  Server:      {}", fav.server);
+    println!("  Mount point: {}", fav.mount_point);
+    match &fav.mac_address {
+        Some(mac) => println!("  MAC address: {}", mac),
+        None => println!("  MAC address: (not discovered — WoL unavailable)"),
+    }
+
+    cfg.favorites.push(fav);
+    config::save(&cfg)?;
+    println!("Saved.");
+
+    Ok(())
+}
+
+fn cmd_remove(share_name: &str) -> Result<()> {
+    let mut cfg = config::load()?;
+    let before = cfg.favorites.len();
+    cfg.favorites
+        .retain(|f| !f.share.eq_ignore_ascii_case(share_name));
+
+    if cfg.favorites.len() == before {
+        anyhow::bail!("'{}' not found in favorites", share_name);
+    }
+
+    config::save(&cfg)?;
+    println!("Removed '{}' from favorites.", share_name);
+    Ok(())
+}
+
+fn cmd_mount(share_name: Option<&str>) -> Result<()> {
+    let cfg = config::load()?;
+    let mounted = discovery::discover_mounted_shares();
+
+    let favorites: Vec<&config::Favorite> = match share_name {
+        Some(name) => {
+            let fav = cfg
+                .favorites
+                .iter()
+                .find(|f| f.share.eq_ignore_ascii_case(name))
+                .ok_or_else(|| anyhow::anyhow!("'{}' not found in favorites", name))?;
+            vec![fav]
+        }
+        None => cfg.favorites.iter().collect(),
+    };
+
+    if favorites.is_empty() {
+        println!("No favorites to mount.");
+        return Ok(());
+    }
+
+    for fav in favorites {
+        let already_mounted = mounted.iter().any(|m| {
+            m.share.eq_ignore_ascii_case(&fav.share)
+                && m.server.eq_ignore_ascii_case(&fav.server)
+        });
+
+        if already_mounted {
+            println!("{}: already mounted", fav.share);
+            continue;
+        }
+
+        println!("{}: mounting...", fav.share);
+        match mount::smb::mount_favorite(fav) {
+            Ok(()) => println!("{}: mounted at {}", fav.share, fav.mount_point),
+            Err(e) => eprintln!("{}: mount failed — {}", fav.share, e),
+        }
+    }
+
+    Ok(())
+}
+
+fn cmd_unmount(share_name: &str) -> Result<()> {
+    let cfg = config::load()?;
+
+    // Find in favorites for mount point
+    let fav = cfg
+        .favorites
+        .iter()
+        .find(|f| f.share.eq_ignore_ascii_case(share_name));
+
+    let mount_point = match fav {
+        Some(f) => f.mount_point.clone(),
+        None => {
+            // Try to find it in currently mounted shares
+            let mounted = discovery::discover_mounted_shares();
+            let found = mounted
+                .iter()
+                .find(|m| m.share.eq_ignore_ascii_case(share_name));
+            match found {
+                Some(m) => m.mount_point.clone(),
+                None => anyhow::bail!("'{}' is not mounted and not in favorites", share_name),
+            }
+        }
+    };
+
+    println!("{}: unmounting...", share_name);
+    mount::smb::unmount(std::path::Path::new(&mount_point))?;
+    println!("{}: unmounted", share_name);
+    Ok(())
+}
+
+fn cmd_status() -> Result<()> {
+    let cfg = config::load()?;
+    if cfg.favorites.is_empty() {
+        println!("No favorites configured.");
+        return Ok(());
+    }
+
+    let mounted = discovery::discover_mounted_shares();
+
+    println!(
+        "{:<14} {:<12} {:<30} {}",
+        "SHARE", "STATUS", "INTERFACE", "SMB VERSION"
+    );
+
+    for fav in &cfg.favorites {
+        let mount_info = mounted.iter().find(|m| {
+            m.share.eq_ignore_ascii_case(&fav.share)
+                && m.server.eq_ignore_ascii_case(&fav.server)
+        });
+
+        match mount_info {
+            Some(m) => {
+                let iface_str = match (&m.interface, &m.interface_label) {
+                    (Some(iface), Some(label)) => format!("{} ({})", iface, label),
+                    (Some(iface), None) => iface.clone(),
+                    _ => "—".to_string(),
+                };
+                let smb_ver = m.smb_version.as_deref().unwrap_or("—");
+                println!(
+                    "{:<14} {:<12} {:<30} {}",
+                    fav.share, "● Connected", iface_str, smb_ver
+                );
+            }
+            None => {
+                let reachable = discovery::is_server_reachable(&fav.server);
+                let status = if reachable {
+                    "○ Reachable"
+                } else {
+                    "✕ Offline"
+                };
+                println!("{:<14} {:<12} {:<30} {}", fav.share, status, "—", "—");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn cmd_wake(share_name: &str) -> Result<()> {
+    let cfg = config::load()?;
+    let fav = cfg
+        .favorites
+        .iter()
+        .find(|f| f.share.eq_ignore_ascii_case(share_name))
+        .ok_or_else(|| anyhow::anyhow!("'{}' not found in favorites", share_name))?;
+
+    let mac = fav
+        .mac_address
+        .as_ref()
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "No MAC address stored for '{}'. Re-add with --mac flag.",
+                share_name
+            )
+        })?;
+
+    println!("Sending Wake-on-LAN to {} ({})", fav.server, mac);
+    wol::send_wol(mac)?;
+
+    println!("Waiting for server to respond...");
+    for i in 1..=10 {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        if discovery::is_server_reachable(&fav.server) {
+            println!("{} is online after ~{}s", fav.server, i * 2);
+            return Ok(());
+        }
+        print!(".");
+        use std::io::Write;
+        std::io::stdout().flush()?;
+    }
+
+    println!("\n{} did not respond within 20s. It may still be waking up.", fav.server);
+    Ok(())
+}
+
+fn cmd_watch() -> Result<()> {
+    watcher::run()
 }
