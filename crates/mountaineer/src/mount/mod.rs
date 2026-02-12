@@ -1,4 +1,4 @@
 pub mod manager;
 pub mod smb;
 
-pub use smb::{mount, unmount, MountError, MountParams};
+pub use smb::{is_mounted, mount, unmount, MountError, MountParams};

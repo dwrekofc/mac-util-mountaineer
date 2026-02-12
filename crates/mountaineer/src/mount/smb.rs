@@ -147,6 +147,26 @@ pub fn mount(params: &MountParams) -> Result<(), MountError> {
 }
 
 // ---------------------------------------------------------------------------
+// is_mounted
+// ---------------------------------------------------------------------------
+
+/// Check if a path is currently an active SMB mount point.
+pub fn is_mounted(mount_point: &Path) -> bool {
+    let output = match Command::new("mount").arg("-t").arg("smbfs").output() {
+        Ok(out) => out,
+        Err(_) => return false,
+    };
+
+    if !output.status.success() {
+        return false;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let target = mount_point.to_string_lossy();
+    stdout.lines().any(|line| line.contains(&*target))
+}
+
+// ---------------------------------------------------------------------------
 // unmount
 // ---------------------------------------------------------------------------
 

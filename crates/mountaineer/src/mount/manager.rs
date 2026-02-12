@@ -151,10 +151,38 @@ pub fn reconcile_drive(
     interfaces: &[NetworkInterface],
     password: &str,
 ) -> DriveStatus {
-    let action = plan_reconcile(config, status, interfaces);
+    // If mount point is already mounted but our status doesn't reflect it,
+    // correct the status. This handles shares mounted externally (e.g., by
+    // macOS via Apple ID) or surviving from a previous app session.
+    let effective_status = if smb::is_mounted(&config.mount_point) {
+        match status {
+            DriveStatus::Disconnected | DriveStatus::Error(_) => {
+                if let Some(iface) = best_interface(interfaces) {
+                    let corrected = DriveStatus::Connected {
+                        via: iface.interface_type,
+                        ip: iface.ipv4_addresses[0],
+                    };
+                    log::info!(
+                        "[{}] Detected existing mount at {}, marking connected via {}",
+                        config.label,
+                        config.mount_point.display(),
+                        iface.interface_type,
+                    );
+                    corrected
+                } else {
+                    status.clone()
+                }
+            }
+            _ => status.clone(),
+        }
+    } else {
+        status.clone()
+    };
+
+    let action = plan_reconcile(config, &effective_status, interfaces);
 
     match action {
-        ReconcileAction::NoOp => status.clone(),
+        ReconcileAction::NoOp => effective_status,
 
         ReconcileAction::Mount {
             server,
