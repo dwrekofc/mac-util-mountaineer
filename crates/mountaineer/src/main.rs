@@ -27,13 +27,12 @@ fn main() {
         tray::install(cx);
         start_network_monitor(cx);
 
-        // Initial reconcile on startup — runs after the event loop starts.
-        cx.defer(|cx: &mut App| {
-            log::info!("Initial reconcile on startup");
-            let interfaces = network::enumerate_interfaces();
-            let state = cx.global_mut::<AppState>();
-            mount::manager::reconcile_all(state, &interfaces);
-        });
+        // Initial reconcile — run synchronously during startup.
+        // (cx.defer doesn't tick in a windowless menu-bar app.)
+        log::info!("Initial reconcile on startup");
+        let interfaces = network::enumerate_interfaces();
+        let state = cx.global_mut::<AppState>();
+        mount::manager::reconcile_all(state, &interfaces);
 
         log::info!("GPUI app running");
     });
