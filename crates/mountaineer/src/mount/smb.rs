@@ -54,45 +54,75 @@ impl std::error::Error for MountError {
 
 /// Mount a favorite share using macOS Keychain for authentication.
 ///
-/// Uses `mount_smbfs //server/share /mount/point` without `-N` flag,
-/// which tells macOS to look up credentials from the Keychain automatically.
+/// For /Volumes/ mount points, uses `open smb://server/share` which triggers
+/// macOS native mounting (has permissions to create /Volumes/ directories).
+/// For other mount points, uses `mount_smbfs //server/share /mount/point`.
 pub fn mount_favorite(fav: &crate::config::Favorite) -> Result<(), MountError> {
     let mount_point = Path::new(&fav.mount_point);
 
-    // Ensure mount point directory exists
-    if !mount_point.exists() {
-        std::fs::create_dir_all(mount_point).map_err(|e| MountError::CreateMountPoint {
-            path: mount_point.to_path_buf(),
-            source: e,
-        })?;
-    }
+    // /Volumes/ is SIP-protected — use `open smb://` for native macOS mount
+    if fav.mount_point.starts_with("/Volumes/") {
+        let smb_url = format!("smb://{}/{}", fav.server, fav.share);
+        let output = Command::new("open")
+            .arg(&smb_url)
+            .output()
+            .map_err(|e| MountError::CommandSpawn {
+                command: "open".into(),
+                source: e,
+            })?;
 
-    let smb_url = format!("//{}/{}", fav.server, fav.share);
-
-    let output = Command::new("mount_smbfs")
-        .arg(&smb_url)
-        .arg(mount_point)
-        .output()
-        .map_err(|e| MountError::CommandSpawn {
-            command: "mount_smbfs".into(),
-            source: e,
-        })?;
-
-    if output.status.success() {
-        log::info!(
-            "Mounted //{}/{} at {}",
-            fav.server,
-            fav.share,
-            mount_point.display(),
-        );
-        Ok(())
+        if output.status.success() {
+            log::info!(
+                "Mounted //{}/{} via open smb:// (macOS native)",
+                fav.server,
+                fav.share,
+            );
+            // Wait briefly for macOS to complete the mount
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            Ok(())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            log::error!("open smb:// failed: {}", stderr);
+            Err(MountError::MountFailed {
+                stderr,
+                exit_code: output.status.code(),
+            })
+        }
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        log::error!("mount_smbfs failed: {}", stderr);
-        Err(MountError::MountFailed {
-            stderr,
-            exit_code: output.status.code(),
-        })
+        // Non-/Volumes/ mount point — use mount_smbfs directly
+        if !mount_point.exists() {
+            std::fs::create_dir_all(mount_point).map_err(|e| MountError::CreateMountPoint {
+                path: mount_point.to_path_buf(),
+                source: e,
+            })?;
+        }
+
+        let smb_url = format!("//{}/{}", fav.server, fav.share);
+        let output = Command::new("mount_smbfs")
+            .arg(&smb_url)
+            .arg(mount_point)
+            .output()
+            .map_err(|e| MountError::CommandSpawn {
+                command: "mount_smbfs".into(),
+                source: e,
+            })?;
+
+        if output.status.success() {
+            log::info!(
+                "Mounted //{}/{} at {}",
+                fav.server,
+                fav.share,
+                mount_point.display(),
+            );
+            Ok(())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            log::error!("mount_smbfs failed: {}", stderr);
+            Err(MountError::MountFailed {
+                stderr,
+                exit_code: output.status.code(),
+            })
+        }
     }
 }
 
