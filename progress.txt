@@ -110,4 +110,7 @@
   - kCFRunLoopCommonModes requires `unsafe` block to access (it's a raw CFStringRef)
   - thread::Builder::new().name("network-monitor") makes debug logs/backtraces more readable than bare thread::spawn
   - /Applications/ requires admin group; user installs to ~/Applications/
+  - Live test confirmed: toggling WiFi off/on produces ~12 events in sequence (Link, IPv4, IPv6, Global for both down and up)
+  - awdl0/Link events fire as side effect of WiFi toggle (Apple Wireless Direct Link for AirDrop) — correctly filtered out by enumerate_interfaces() since we only report Ethernet/WiFi
+  - Multiple rapid events are expected per state change — the reconcile engine should debounce or batch these
 ---
