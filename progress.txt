@@ -23,7 +23,7 @@
 - Reconcile pattern: separate pure decision logic (plan_reconcile) from I/O execution (reconcile_drive) for testability
 - InterfaceType::cmp_priority() is pub(crate) — used by reconcile engine to compare interface priority
 - When iterating AppState drives + updating statuses: clone DriveConfig and collect DriveIds first to avoid borrow conflicts with HashMap
-- cx.defer() runs a closure on the next GPUI frame — useful for "on startup" actions after event loop starts
+- cx.defer() does NOT tick in windowless menu-bar apps (no window = no frame pump) — run startup logic inline instead
 
 ---
 
