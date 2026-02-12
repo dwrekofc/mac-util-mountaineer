@@ -1,12 +1,14 @@
 ## Codebase Patterns
 
 - GPUI spawn uses async closure syntax: `cx.spawn(async move |cx: &mut AsyncApp| { ... })` — NOT `|cx| async move { ... }`
-- tray-icon TrayIcon must be kept alive (use `std::mem::forget`) or the tray icon disappears
+- tray-icon TrayIcon is !Send (contains Rc) — must stay on the main thread; own it in a single GPUI cx.spawn() async task
+- tray-icon TrayIcon must be kept alive (use `std::mem::forget` or move into long-lived async task) or the tray icon disappears
 - tray-icon re-exports muda under `tray_icon::menu::*` — no need to depend on muda separately
 - MenuEvent/TrayIconEvent use crossbeam channels: clone the receiver, then `try_recv()` in a polling loop
 - macOS app bundles: `LSUIElement = true` in Info.plist makes a menu-bar-only app (no Dock icon)
 - User not in admin group — install to ~/Applications/ instead of /Applications/ (CLAUDE.md says /Applications but that's wrong)
-- mount_smbfs: use -N flag to suppress password prompt when credentials are in URL
+- mount_smbfs WITHOUT -N flag = macOS Keychain handles auth automatically (v2 approach)
+- mount_smbfs: use -N flag to suppress password prompt when credentials are in URL (v1 approach)
 - SMB URL format: //user:pass@server/share — percent-encode user/pass for special chars (@, :, /, %, space, etc.)
 - unmount strategy: diskutil unmount force first, then umount -f as fallback
 - `cp -R` to overwrite existing .app bundles; don't try to rm -rf first (macOS xattr issues)
@@ -169,4 +171,27 @@
   - cx.defer() schedules a closure for the next GPUI frame — perfect for "run after app initialization is complete"
   - Server address selection: use server_ethernet_ip when Ethernet is best interface, fall back to hostname for WiFi or when no direct IP configured
   - DriveStatus state machine: Disconnected/Error → Mount; Connected + better interface → Remount; Connected + interface gone → Remount (failover); Mounting/Reconnecting → NoOp (don't interfere)
+---
+
+[2026-02-12 21:30] - [Phase 2] Menu bar app with tray icon (bd-1wd) + LaunchAgent (bd-3if)
+
+- Implemented: v2 Phase 2 — GPUI menu bar app + LaunchAgent
+  - gui.rs: GPUI Application bootstrap, NSApplicationActivationPolicyAccessory override via objc msg_send
+  - tray.rs: TrayIcon with dynamic menu (favorites + status, mount all, wake all, open in finder, quit)
+  - Single GPUI async task owns TrayIcon (it's !Send), polls MenuEvent + network changes + 30s status refresh
+  - launchd.rs: install/uninstall/is_installed for ~/Library/LaunchAgents/com.mountaineer.agent.plist
+  - cli.rs: command field made Optional (None=GUI, Some=CLI), added Install/Uninstall subcommands
+  - Re-integrated GPUI deps (git dep, gpui-component local path, core-text downgrade, font-kit patch)
+- Files changed:
+  - Created: crates/mountaineer/src/gui.rs, tray.rs, launchd.rs
+  - Modified: Cargo.toml (root + crate), cli.rs, main.rs
+- Learnings:
+  - TrayIcon from tray-icon 0.19 is !Send (contains Rc<RefCell<...>>). Cannot wrap in Arc<Mutex> and share across threads. Must keep on main thread — move into a single GPUI cx.spawn() async task
+  - Merge event polling, status polling, and network change listening into ONE async task that owns the TrayIcon. Use try_recv() on both MenuEvent::receiver() and network mpsc::Receiver
+  - GPUI hardcodes NSApplicationActivationPolicyRegular. Override to Accessory (=1) via objc msg_send! inside the run() callback. LSUIElement=true in Info.plist alone is not sufficient
+  - objc 0.2 macros produce unexpected_cfgs warnings about "cargo-clippy" — suppress with #![allow(unexpected_cfgs)] at crate level
+  - core-text 21.1.0 has breaking type mismatch with gpui's core-graphics version. Must downgrade: `cargo update -p core-text@21.1.0 --precise 21.0.0`
+  - font-kit patch still required: `[patch.crates-io] zed-font-kit = { git = "...", rev = "110523..." }`
+  - LaunchAgent plist: ProgramArguments points to .app/Contents/MacOS/Mountaineer (no args = GUI mode). launchctl load/unload for immediate activation
+  - Closed 15+ over-scoped sub-tasks (IPC, mDNS, Network Browser, Dashboard, Settings) that belonged to future epics
 ---
