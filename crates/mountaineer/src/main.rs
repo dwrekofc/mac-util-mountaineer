@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui::*;
@@ -52,9 +51,23 @@ fn start_network_monitor(cx: &App) {
                 .timer(Duration::from_millis(200))
                 .await;
 
+            // Drain all queued events into a batch.
+            let mut had_events = false;
             while let Ok(event) = network_rx.try_recv() {
-                log::info!("Network change detected: {:?}", event.changed_keys);
+                log::info!("Network change: {:?}", event.changed_keys);
+                had_events = true;
+            }
 
+            if had_events {
+                // Debounce: wait for events to settle, then drain stragglers.
+                cx.background_executor()
+                    .timer(Duration::from_millis(500))
+                    .await;
+                while let Ok(event) = network_rx.try_recv() {
+                    log::info!("Network change (settling): {:?}", event.changed_keys);
+                }
+
+                // Reconcile once for the entire batch.
                 let _ = cx.update(|cx: &mut App| {
                     let interfaces = network::enumerate_interfaces();
                     if interfaces.is_empty() {
@@ -85,6 +98,12 @@ fn add_test_drive(cx: &mut App) {
         log::warn!("SMB_PASSWORD not set — test drive mount will fail on auth");
     }
 
+    // Use ~/Mounts/ instead of /Volumes/ — macOS SIP prevents regular users
+    // from creating directories in /Volumes/ after an unmount removes them.
+    let mount_base = dirs::home_dir()
+        .expect("no home directory")
+        .join("Mounts");
+
     let drive = DriveConfig {
         id: DriveId::new(),
         label: "Mac Mini CORE-01".into(),
@@ -92,7 +111,7 @@ fn add_test_drive(cx: &mut App) {
         server_ethernet_ip: Some("192.168.50.146".parse().unwrap()),
         share_name: "CORE-01".into(),
         username: "dskinnell".into(),
-        mount_point: PathBuf::from("/Volumes/CORE-01"),
+        mount_point: mount_base.join("CORE-01"),
         enabled: true,
     };
 
