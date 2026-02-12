@@ -129,7 +129,7 @@ pub fn enumerate_interfaces() -> Vec<NetworkInterface> {
 
 impl InterfaceType {
     /// Priority for sorting: lower = higher priority.
-    fn cmp_priority(&self) -> u8 {
+    pub(crate) fn cmp_priority(&self) -> u8 {
         match self {
             InterfaceType::Ethernet => 0,
             InterfaceType::WiFi => 1,

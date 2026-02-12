@@ -117,6 +117,8 @@ pub struct AppState {
     pub drive_statuses: HashMap<DriveId, DriveStatus>,
     /// One-off mounts not persisted in config.
     pub adhoc_mounts: Vec<AdhocMount>,
+    /// Temporary in-memory password store until Keychain integration (bd-r83).
+    pub passwords: HashMap<DriveId, String>,
 }
 
 impl Global for AppState {}
@@ -127,6 +129,7 @@ impl AppState {
             drives: HashMap::new(),
             drive_statuses: HashMap::new(),
             adhoc_mounts: Vec::new(),
+            passwords: HashMap::new(),
         }
     }
 }

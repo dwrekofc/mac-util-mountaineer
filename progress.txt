@@ -20,6 +20,10 @@
 - nix 0.30 already transitive dep from gpui→command-fds; just add `features = ["net"]` to enable getifaddrs
 - Combine system-configuration (type detection) + nix getifaddrs (IP retrieval) by matching on BSD interface name
 - GPUI Global pattern: `impl Global for T {}`, register with `cx.set_global(T::new())`, access via `cx.global::<T>()` / `cx.global_mut::<T>()`
+- Reconcile pattern: separate pure decision logic (plan_reconcile) from I/O execution (reconcile_drive) for testability
+- InterfaceType::cmp_priority() is pub(crate) — used by reconcile engine to compare interface priority
+- When iterating AppState drives + updating statuses: clone DriveConfig and collect DriveIds first to avoid borrow conflicts with HashMap
+- cx.defer() runs a closure on the next GPUI frame — useful for "on startup" actions after event loop starts
 
 ---
 
@@ -138,4 +142,31 @@
   - Percent-encoding is important for passwords with @, :, /, %, space — mount_smbfs parses the URL and these would break the format
   - diskutil unmount force vs umount -f: diskutil is preferred on macOS (handles APFS/HFS+ cleanly) but umount -f works as fallback for edge cases
   - /Applications/ requires admin group membership; user installs to ~/Applications/
+---
+
+[2026-02-12 00:19] - [Mount] Reconcile engine — failover/failback (bd-vh3 epic)
+
+- Implemented: Complete reconciliation engine for automatic drive mount/failover/failback
+  - Created mount/manager.rs with ReconcileAction enum, plan_reconcile(), reconcile_drive(), reconcile_all()
+  - plan_reconcile(): pure decision logic — takes DriveConfig, DriveStatus, interfaces; returns ReconcileAction (NoOp/Mount/Unmount/Remount)
+  - reconcile_drive(): executes the plan — calls smb::mount()/unmount(), returns new DriveStatus
+  - reconcile_all(): iterates all enabled drives in AppState, reconciles each, updates drive_statuses
+  - Wired to network monitor: reconcile_all() called on every network change event
+  - Wired to startup: cx.defer() runs initial reconcile after event loop starts
+  - Hardcoded test drive: Mac Mini CORE-01 with password via SMB_PASSWORD env var
+  - Added AppState.passwords HashMap for temporary in-memory password store (until Keychain bd-r83)
+  - 21 unit tests for plan_reconcile covering all decision paths
+- Files changed:
+  - Created: crates/mountaineer/src/mount/manager.rs
+  - Modified: crates/mountaineer/src/mount/mod.rs (added pub mod manager)
+  - Modified: crates/mountaineer/src/main.rs (wired reconcile to monitor + startup, added test drive)
+  - Modified: crates/mountaineer/src/app_state.rs (added passwords field to AppState)
+  - Modified: crates/mountaineer/src/network/interface.rs (made cmp_priority pub(crate))
+- Learnings:
+  - Separate pure decision logic from I/O for testability: plan_reconcile() is trivially unit-testable, reconcile_drive() handles the messy I/O
+  - When mutating AppState HashMap while iterating: collect keys first, clone config, then mutate statuses — avoids borrow conflicts
+  - InterfaceType::cmp_priority() needed pub(crate) visibility for cross-module comparison in reconcile engine
+  - cx.defer() schedules a closure for the next GPUI frame — perfect for "run after app initialization is complete"
+  - Server address selection: use server_ethernet_ip when Ethernet is best interface, fall back to hostname for WiFi or when no direct IP configured
+  - DriveStatus state machine: Disconnected/Error → Mount; Connected + better interface → Remount; Connected + interface gone → Remount (failover); Mounting/Reconnecting → NoOp (don't interfere)
 ---
