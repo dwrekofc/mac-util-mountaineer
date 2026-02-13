@@ -71,8 +71,8 @@ fn mount_cycle() -> Result<()> {
             continue;
         }
 
-        // Not mounted — check if server is reachable
-        if discovery::is_server_reachable(&fav.server) {
+        // Not mounted — check if SMB service is reachable (TCP 445)
+        if discovery::is_smb_reachable(&fav.server) {
             println!("[{}] {}: server back online — mounting...", timestamp(), fav.share);
             match mount::smb::mount_favorite(fav) {
                 Ok(()) => {

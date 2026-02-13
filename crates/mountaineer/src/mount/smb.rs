@@ -54,35 +54,34 @@ impl std::error::Error for MountError {
 
 /// Mount a favorite share using macOS Keychain for authentication.
 ///
-/// For /Volumes/ mount points, uses `open smb://server/share` which triggers
-/// macOS native mounting (has permissions to create /Volumes/ directories).
+/// For /Volumes/ mount points, uses `osascript -e 'mount volume "smb://..."'`
+/// which mounts silently via Finder (no window, no progress bar, no error dialog).
 /// For other mount points, uses `mount_smbfs //server/share /mount/point`.
 pub fn mount_favorite(fav: &crate::config::Favorite) -> Result<(), MountError> {
     let mount_point = Path::new(&fav.mount_point);
 
-    // /Volumes/ is SIP-protected — use `open smb://` for native macOS mount
+    // /Volumes/ is SIP-protected — use AppleScript `mount volume` for silent mount
     if fav.mount_point.starts_with("/Volumes/") {
-        let smb_url = format!("smb://{}/{}", fav.server, fav.share);
-        let output = Command::new("open")
-            .arg(&smb_url)
+        let script = format!("mount volume \"smb://{}/{}\"", fav.server, fav.share);
+        let output = Command::new("osascript")
+            .args(["-e", &script])
             .output()
             .map_err(|e| MountError::CommandSpawn {
-                command: "open".into(),
+                command: "osascript".into(),
                 source: e,
             })?;
 
         if output.status.success() {
             log::info!(
-                "Mounted //{}/{} via open smb:// (macOS native)",
+                "Mounted //{}/{} via osascript mount volume (silent)",
                 fav.server,
                 fav.share,
             );
-            // Wait briefly for macOS to complete the mount
-            std::thread::sleep(std::time::Duration::from_secs(2));
+            // osascript mount volume is synchronous — no sleep needed
             Ok(())
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            log::error!("open smb:// failed: {}", stderr);
+            log::error!("osascript mount volume failed: {}", stderr);
             Err(MountError::MountFailed {
                 stderr,
                 exit_code: output.status.code(),
@@ -124,6 +123,25 @@ pub fn mount_favorite(fav: &crate::config::Favorite) -> Result<(), MountError> {
             })
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// is_mount_alive — stale mount detection
+// ---------------------------------------------------------------------------
+
+/// Check if a mount point is actually alive (not stale).
+/// Spawns a thread to call `std::fs::metadata` with a 2-second timeout.
+/// Returns `false` if the metadata call hangs (stale mount) or errors.
+pub fn is_mount_alive(mount_point: &std::path::Path) -> bool {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let path = mount_point.to_path_buf();
+
+    std::thread::spawn(move || {
+        let _ = tx.send(std::fs::metadata(&path).is_ok());
+    });
+
+    rx.recv_timeout(std::time::Duration::from_secs(2))
+        .unwrap_or(false)
 }
 
 // ---------------------------------------------------------------------------

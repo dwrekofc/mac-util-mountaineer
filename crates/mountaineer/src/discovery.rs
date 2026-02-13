@@ -1,5 +1,7 @@
 use std::collections::HashMap;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::process::Command;
+use std::time::Duration;
 
 /// A currently mounted SMB share with connection details.
 #[derive(Debug, Clone)]
@@ -261,7 +263,25 @@ pub fn discover_mac_address(server: &str) -> Option<String> {
     None
 }
 
-/// Check if a server is reachable via ping.
+/// Check if a server's SMB service is reachable via TCP port 445.
+///
+/// More accurate than ICMP ping for mount decisions — a server can respond
+/// to ping while SMB is down. Uses a 2-second connect timeout.
+pub fn is_smb_reachable(server: &str) -> bool {
+    let addr = format!("{}:445", server);
+    let addrs: Vec<_> = match addr.to_socket_addrs() {
+        Ok(a) => a.collect(),
+        Err(_) => return false,
+    };
+    for sock_addr in addrs {
+        if TcpStream::connect_timeout(&sock_addr, Duration::from_secs(2)).is_ok() {
+            return true;
+        }
+    }
+    false
+}
+
+/// Check if a server is reachable via ping (used by WoL logic which needs ICMP).
 pub fn is_server_reachable(server: &str) -> bool {
     Command::new("ping")
         .args(["-c", "1", "-W", "1", server])
