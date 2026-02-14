@@ -27,6 +27,8 @@
 - InterfaceType::cmp_priority() is pub(crate) — used by reconcile engine to compare interface priority
 - When iterating AppState drives + updating statuses: clone DriveConfig and collect DriveIds first to avoid borrow conflicts with HashMap
 - cx.defer() does NOT tick in windowless menu-bar apps (no window = no frame pump) — run startup logic inline instead
+- env_logger::Target::Pipe with raw File is fully buffered; wrap in LineWriter for line-buffered (immediate) flushing to log files
+- External commands (smbutil view, etc.) can hang indefinitely — always use spawn() + try_wait() poll loop with deadline, not .output() which blocks forever
 
 ---
 
@@ -216,4 +218,18 @@
   - Menu ID parsing with split_once(':') is clean for extracting server:share from prefixed IDs
   - Refactoring to return extra data from an existing function (snapshot_statuses → snapshot returning TraySnapshot) avoids duplicate discovery calls
   - Config operations (load/save) are fast enough to run in spawned threads without blocking the GPUI polling loop
+---
+
+[2026-02-13 12:00] - [Fix] Logs not updating + smbutil view timeout
+
+- Implemented: Two fixes for log visibility and auto-mount reliability
+  - logging.rs: Wrapped log file handle in `std::io::LineWriter` so every log line flushes immediately to ~/Library/Logs/mountaineer.log — previously raw File used full buffering, so logs only appeared when buffer filled or process exited
+  - discovery.rs: Already had timeout-based `run_smbutil_view()` from prior session (poll-based with `child.try_wait()` + 5s deadline, kills child on timeout). Verified it's correctly wired via `check_share_available()` which replaced the old blocking `is_share_available()`
+- Files changed:
+  - Modified: crates/mountaineer/src/logging.rs (added LineWriter wrapping)
+- Learnings:
+  - env_logger::Target::Pipe(Box::new(file)) with a raw File uses full buffering (not line-buffered) when writing to a file — logs accumulate in memory and only flush on buffer fill or exit
+  - Wrapping in LineWriter ensures each log line (ending with \n) triggers a flush — critical for real-time log tailing
+  - When LaunchAgent redirects stderr → file, stderr itself becomes fully buffered (not line-buffered like a terminal) — so even env_logger's default stderr target has the same buffering issue under launchd
+  - The logging module already existed from a prior partial implementation — only the LineWriter wrap was missing
 ---
