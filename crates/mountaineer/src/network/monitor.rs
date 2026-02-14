@@ -78,9 +78,7 @@ fn sc_callback(
 ) {
     let keys: Vec<String> = changed_keys.iter().map(|k| k.to_string()).collect();
     log::debug!("SCDynamicStore callback: {:?}", keys);
-    let _ = tx.send(NetworkChangeEvent {
-        changed_keys: keys,
-    });
+    let _ = tx.send(NetworkChangeEvent { changed_keys: keys });
 }
 
 #[cfg(test)]

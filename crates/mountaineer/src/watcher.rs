@@ -28,7 +28,10 @@ pub fn run() -> Result<()> {
                 std::thread::sleep(Duration::from_millis(500));
                 while network_rx.try_recv().is_ok() {}
 
-                println!("[{}] Network change detected — checking favorites...", timestamp());
+                println!(
+                    "[{}] Network change detected — checking favorites...",
+                    timestamp()
+                );
                 mount_cycle()?;
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
@@ -54,13 +57,15 @@ fn mount_cycle() -> Result<()> {
 
     for fav in &cfg.favorites {
         let already_mounted = mounted.iter().any(|m| {
-            m.share.eq_ignore_ascii_case(&fav.share)
-                && m.server.eq_ignore_ascii_case(&fav.server)
+            m.share.eq_ignore_ascii_case(&fav.share) && m.server.eq_ignore_ascii_case(&fav.server)
         });
 
         if already_mounted {
             // Find connection info for logging
-            if let Some(m) = mounted.iter().find(|m| m.share.eq_ignore_ascii_case(&fav.share)) {
+            if let Some(m) = mounted
+                .iter()
+                .find(|m| m.share.eq_ignore_ascii_case(&fav.share))
+            {
                 let iface = match (&m.interface, &m.interface_label) {
                     (Some(i), Some(l)) => format!("{} ({})", i, l),
                     (Some(i), None) => i.clone(),
@@ -73,10 +78,19 @@ fn mount_cycle() -> Result<()> {
 
         // Not mounted — check if SMB service is reachable (TCP 445)
         if discovery::is_smb_reachable(&fav.server) {
-            println!("[{}] {}: server back online — mounting...", timestamp(), fav.share);
+            println!(
+                "[{}] {}: server back online — mounting...",
+                timestamp(),
+                fav.share
+            );
             match mount::smb::mount_favorite(fav) {
                 Ok(()) => {
-                    println!("[{}] {}: mounted at {}", timestamp(), fav.share, fav.mount_point);
+                    println!(
+                        "[{}] {}: mounted at {}",
+                        timestamp(),
+                        fav.share,
+                        fav.mount_point
+                    );
                 }
                 Err(e) => {
                     eprintln!("[{}] {}: mount failed — {}", timestamp(), fav.share, e);

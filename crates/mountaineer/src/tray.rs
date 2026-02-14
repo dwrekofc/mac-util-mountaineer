@@ -55,8 +55,7 @@ fn snapshot() -> TraySnapshot {
         .into_iter()
         .filter(|m| {
             !cfg.favorites.iter().any(|f| {
-                f.share.eq_ignore_ascii_case(&m.share)
-                    && f.server.eq_ignore_ascii_case(&m.server)
+                f.share.eq_ignore_ascii_case(&m.share) && f.server.eq_ignore_ascii_case(&m.server)
             })
         })
         .map(|m| (m.share, m.server))
@@ -229,9 +228,7 @@ pub fn install(cx: &mut App) {
 
                 // Refresh after non-mount actions (config changes, etc.)
                 if !id.starts_with("mount-") {
-                    cx.background_executor()
-                        .timer(Duration::from_secs(3))
-                        .await;
+                    cx.background_executor().timer(Duration::from_secs(3)).await;
                     let snap = snapshot();
                     tray.set_menu(Some(Box::new(build_menu(&snap))));
                     prev_snap = snap;
@@ -266,7 +263,11 @@ pub fn install(cx: &mut App) {
             // --- Startup auto-mount (once, after 5s delay) ---
             if !startup_mount_done && now.duration_since(start_time) >= Duration::from_secs(5) {
                 startup_mount_done = true;
-                log::info!("Startup auto-mount — mounting reachable favorites");
+                let favorite_count = config::load().map(|c| c.favorites.len()).unwrap_or(0);
+                log::info!(
+                    "Startup auto-mount — mounting reachable favorites ({} configured)",
+                    favorite_count
+                );
                 if trigger_mount(false, &mount_in_progress, &mount_done_tx) {
                     last_auto_mount = now;
                 }
@@ -290,10 +291,7 @@ pub fn install(cx: &mut App) {
                 last_status_check = now;
 
                 // Auto-mount if any favorites are disconnected and cooldown elapsed
-                let has_unmounted = new_snap
-                    .favorites
-                    .iter()
-                    .any(|f| !f.connected);
+                let has_unmounted = new_snap.favorites.iter().any(|f| !f.connected);
 
                 if has_unmounted && now.duration_since(last_auto_mount) >= mount_cooldown {
                     log::debug!("Unmounted favorites detected — triggering auto-mount");
@@ -377,18 +375,20 @@ fn add_share_to_favorites(server: &str, share: &str) {
     };
 
     // Already a favorite — nothing to do
-    if cfg.favorites.iter().any(|f| {
-        f.share.eq_ignore_ascii_case(share) && f.server.eq_ignore_ascii_case(server)
-    }) {
+    if cfg
+        .favorites
+        .iter()
+        .any(|f| f.share.eq_ignore_ascii_case(share) && f.server.eq_ignore_ascii_case(server))
+    {
         log::warn!("{} on {} is already a favorite", share, server);
         return;
     }
 
     // Find in currently mounted shares to get mount_point
     let mounted = discovery::discover_mounted_shares();
-    let found = mounted.iter().find(|m| {
-        m.share.eq_ignore_ascii_case(share) && m.server.eq_ignore_ascii_case(server)
-    });
+    let found = mounted
+        .iter()
+        .find(|m| m.share.eq_ignore_ascii_case(share) && m.server.eq_ignore_ascii_case(server));
 
     let mount_point = match found {
         Some(m) => m.mount_point.clone(),
@@ -456,16 +456,28 @@ fn auto_mount_cycle(verify_liveness: bool) -> usize {
     };
 
     if cfg.favorites.is_empty() {
+        log::debug!("auto_mount_cycle: no favorites configured");
         return 0;
     }
+
+    log::info!(
+        "auto_mount_cycle: starting (verify_liveness={}, favorites={})",
+        verify_liveness,
+        cfg.favorites.len()
+    );
 
     let mounted = discovery::discover_mounted_shares();
     let mut newly_mounted = 0;
 
     for fav in &cfg.favorites {
+        log::debug!(
+            "auto_mount_cycle: evaluating {} on {} ({})",
+            fav.share,
+            fav.server,
+            fav.mount_point
+        );
         let appears_mounted = mounted.iter().any(|m| {
-            m.share.eq_ignore_ascii_case(&fav.share)
-                && m.server.eq_ignore_ascii_case(&fav.server)
+            m.share.eq_ignore_ascii_case(&fav.share) && m.server.eq_ignore_ascii_case(&fav.server)
         });
 
         let actually_mounted = if appears_mounted && verify_liveness {
@@ -490,24 +502,31 @@ fn auto_mount_cycle(verify_liveness: bool) -> usize {
             appears_mounted
         };
 
-        if !actually_mounted {
-            if discovery::is_smb_reachable(&fav.server) {
-                log::info!("{}: SMB reachable — mounting...", fav.share);
-                match mount::smb::mount_favorite(fav) {
-                    Ok(()) => {
-                        log::info!("{}: mounted at {}", fav.share, fav.mount_point);
-                        newly_mounted += 1;
-                    }
-                    Err(e) => {
-                        log::error!("{}: mount failed — {}", fav.share, e);
-                    }
+        if actually_mounted {
+            log::debug!("{}: already mounted", fav.share);
+            continue;
+        }
+
+        if discovery::is_smb_reachable(&fav.server) {
+            log::info!("{}: SMB reachable — mounting...", fav.share);
+            match mount::smb::mount_favorite(fav) {
+                Ok(()) => {
+                    log::info!("{}: mounted at {}", fav.share, fav.mount_point);
+                    newly_mounted += 1;
                 }
-            } else {
-                log::debug!("{}: SMB unreachable (port 445) — skipping", fav.share);
+                Err(e) => {
+                    log::error!("{}: mount failed — {}", fav.share, e);
+                }
             }
+        } else {
+            log::debug!("{}: SMB unreachable (port 445) — skipping", fav.share);
         }
     }
 
+    log::info!(
+        "auto_mount_cycle: completed (newly_mounted={})",
+        newly_mounted
+    );
     newly_mounted
 }
 

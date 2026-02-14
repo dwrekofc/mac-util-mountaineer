@@ -31,6 +31,11 @@ fn generate_plist(home: &str) -> String {
     <array>
         <string>{executable}</string>
     </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>RUST_LOG</key>
+        <string>info</string>
+    </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
@@ -62,8 +67,7 @@ pub fn install() -> Result<()> {
 
     // Write plist
     let content = generate_plist(home_str);
-    fs::write(&plist, &content)
-        .with_context(|| format!("Failed to write plist to {:?}", plist))?;
+    fs::write(&plist, &content).with_context(|| format!("Failed to write plist to {:?}", plist))?;
 
     // Load the agent
     let status = Command::new("launchctl")

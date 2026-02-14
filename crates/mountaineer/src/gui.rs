@@ -9,10 +9,8 @@ pub fn run() {
             use objc::msg_send;
             use objc::sel;
             use objc::sel_impl;
-            let ns_app: *mut objc::runtime::Object = msg_send![
-                objc::class!(NSApplication),
-                sharedApplication
-            ];
+            let ns_app: *mut objc::runtime::Object =
+                msg_send![objc::class!(NSApplication), sharedApplication];
             // NSApplicationActivationPolicyAccessory = 1
             let _: () = msg_send![ns_app, setActivationPolicy: 1i64];
         }

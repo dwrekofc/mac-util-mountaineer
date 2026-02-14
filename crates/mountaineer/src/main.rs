@@ -8,6 +8,7 @@ mod config;
 mod discovery;
 mod gui;
 mod launchd;
+mod logging;
 mod mount;
 mod network;
 mod tray;
@@ -17,8 +18,15 @@ mod wol;
 use cli::{Cli, Command};
 
 fn main() -> Result<()> {
-    env_logger::init();
     let cli = Cli::parse();
+    let mode = if cli.command.is_none() {
+        logging::LoggingMode::Gui
+    } else {
+        logging::LoggingMode::Cli
+    };
+    if let Err(e) = logging::init(mode) {
+        eprintln!("mountaineer: {}", e);
+    }
 
     match cli.command {
         None => {
@@ -91,10 +99,13 @@ fn cmd_favorites() -> Result<()> {
 
     for fav in &cfg.favorites {
         let is_mounted = mounted.iter().any(|m| {
-            m.share.eq_ignore_ascii_case(&fav.share)
-                && m.server.eq_ignore_ascii_case(&fav.server)
+            m.share.eq_ignore_ascii_case(&fav.share) && m.server.eq_ignore_ascii_case(&fav.server)
         });
-        let status = if is_mounted { "● Mounted" } else { "○ Offline" };
+        let status = if is_mounted {
+            "● Mounted"
+        } else {
+            "○ Offline"
+        };
 
         println!(
             "{:<14} {:<20} {:<24} {}",
@@ -201,8 +212,7 @@ fn cmd_mount(share_name: Option<&str>) -> Result<()> {
 
     for fav in favorites {
         let already_mounted = mounted.iter().any(|m| {
-            m.share.eq_ignore_ascii_case(&fav.share)
-                && m.server.eq_ignore_ascii_case(&fav.server)
+            m.share.eq_ignore_ascii_case(&fav.share) && m.server.eq_ignore_ascii_case(&fav.server)
         });
 
         if already_mounted {
@@ -266,8 +276,7 @@ fn cmd_status() -> Result<()> {
 
     for fav in &cfg.favorites {
         let mount_info = mounted.iter().find(|m| {
-            m.share.eq_ignore_ascii_case(&fav.share)
-                && m.server.eq_ignore_ascii_case(&fav.server)
+            m.share.eq_ignore_ascii_case(&fav.share) && m.server.eq_ignore_ascii_case(&fav.server)
         });
 
         match mount_info {
@@ -306,15 +315,12 @@ fn cmd_wake(share_name: &str) -> Result<()> {
         .find(|f| f.share.eq_ignore_ascii_case(share_name))
         .ok_or_else(|| anyhow::anyhow!("'{}' not found in favorites", share_name))?;
 
-    let mac = fav
-        .mac_address
-        .as_ref()
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "No MAC address stored for '{}'. Re-add with --mac flag.",
-                share_name
-            )
-        })?;
+    let mac = fav.mac_address.as_ref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "No MAC address stored for '{}'. Re-add with --mac flag.",
+            share_name
+        )
+    })?;
 
     println!("Sending Wake-on-LAN to {} ({})", fav.server, mac);
     wol::send_wol(mac)?;
@@ -331,7 +337,10 @@ fn cmd_wake(share_name: &str) -> Result<()> {
         std::io::stdout().flush()?;
     }
 
-    println!("\n{} did not respond within 20s. It may still be waking up.", fav.server);
+    println!(
+        "\n{} did not respond within 20s. It may still be waking up.",
+        fav.server
+    );
     Ok(())
 }
 

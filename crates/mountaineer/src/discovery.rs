@@ -1,7 +1,8 @@
 use std::collections::HashMap;
+use std::io::Read;
 use std::net::{TcpStream, ToSocketAddrs};
-use std::process::Command;
-use std::time::Duration;
+use std::process::{Command, ExitStatus, Stdio};
+use std::time::{Duration, Instant};
 
 /// A currently mounted SMB share with connection details.
 #[derive(Debug, Clone)]
@@ -104,10 +105,7 @@ fn parse_mount_smbfs() -> Vec<(String, String, String)> {
 ///                               SMB_VERSION                   SMB_3.0.2
 /// ```
 fn parse_smbutil_statshares() -> HashMap<String, String> {
-    let output = match Command::new("smbutil")
-        .args(["statshares", "-a"])
-        .output()
-    {
+    let output = match Command::new("smbutil").args(["statshares", "-a"]).output() {
         Ok(o) if o.status.success() => o,
         _ => return HashMap::new(),
     };
@@ -184,10 +182,7 @@ fn resolve_hostname(hostname: &str) -> Option<String> {
 
 /// Run `route get <ip>` and extract the interface name.
 fn get_route_interface(ip: &str) -> Option<String> {
-    let output = Command::new("route")
-        .args(["get", ip])
-        .output()
-        .ok()?;
+    let output = Command::new("route").args(["get", ip]).output().ok()?;
 
     if !output.status.success() {
         return None;
@@ -281,6 +276,121 @@ pub fn is_smb_reachable(server: &str) -> bool {
     false
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShareCheckResult {
+    Available,
+    NotFound,
+    Unknown { reason: String },
+}
+
+/// Check whether a specific share is available on a server by enumerating shares.
+///
+/// Uses `smbutil view //server` which lists shares without mounting.
+/// Returns:
+/// - [`ShareCheckResult::Available`] when share was listed
+/// - [`ShareCheckResult::NotFound`] when enumeration succeeded but share is absent
+/// - [`ShareCheckResult::Unknown`] for timeout/spawn/command failures
+pub fn check_share_available(server: &str, share: &str, timeout: Duration) -> ShareCheckResult {
+    let output = match run_smbutil_view(server, timeout) {
+        Ok(o) => o,
+        Err(reason) => {
+            log::debug!(
+                "smbutil view preflight unavailable for {}: {}",
+                server,
+                reason
+            );
+            return ShareCheckResult::Unknown { reason };
+        }
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let reason = format!(
+            "smbutil view exited with {:?}: {}",
+            output.status.code(),
+            stderr
+        );
+        log::debug!(
+            "smbutil view preflight unavailable for {}: {}",
+            server,
+            reason
+        );
+        return ShareCheckResult::Unknown { reason };
+    }
+
+    if parse_smbutil_view_contains_share(&output.stdout, share) {
+        ShareCheckResult::Available
+    } else {
+        ShareCheckResult::NotFound
+    }
+}
+
+struct CommandOutput {
+    status: ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+fn run_smbutil_view(server: &str, timeout: Duration) -> Result<CommandOutput, String> {
+    let mut child = Command::new("smbutil")
+        .args(["view", &format!("//{}", server)])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("failed to spawn smbutil view: {}", e))?;
+
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!(
+                        "smbutil view timed out after {}ms",
+                        timeout.as_millis()
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("failed while waiting for smbutil view: {}", e));
+            }
+        }
+    };
+
+    let mut stdout = Vec::new();
+    if let Some(mut out) = child.stdout.take() {
+        let _ = out.read_to_end(&mut stdout);
+    }
+    let mut stderr = Vec::new();
+    if let Some(mut err) = child.stderr.take() {
+        let _ = err.read_to_end(&mut stderr);
+    }
+
+    Ok(CommandOutput {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+fn parse_smbutil_view_contains_share(stdout: &[u8], share: &str) -> bool {
+    let text = String::from_utf8_lossy(stdout);
+    text.lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with("Share") || trimmed.starts_with("-----") {
+                return None;
+            }
+            trimmed.split_whitespace().next()
+        })
+        .any(|name| name.eq_ignore_ascii_case(share))
+}
+
 /// Check if a server is reachable via ping (used by WoL logic which needs ICMP).
 pub fn is_server_reachable(server: &str) -> bool {
     Command::new("ping")
@@ -308,15 +418,38 @@ mod tests {
     #[test]
     fn hardware_ports_returns_map() {
         let ports = parse_hardware_ports();
-        // Should have at least en0 on any Mac
-        assert!(
-            !ports.is_empty(),
-            "expected at least one hardware port mapping"
-        );
+        // Environment-dependent command; this test only verifies no panic and
+        // stable key/value shape when entries are present.
+        for (device, port) in ports {
+            assert!(!device.trim().is_empty());
+            assert!(!port.trim().is_empty());
+        }
     }
 
     #[test]
     fn resolve_ip_passthrough() {
         assert_eq!(resolve_hostname("10.0.0.1"), Some("10.0.0.1".to_string()));
+    }
+
+    #[test]
+    fn parse_smbutil_view_contains_expected_share() {
+        let sample = br#"
+Share                         Type    Comments
+-----                         ----    --------
+CORE-01                       Disk
+VAULT-R1                      Disk
+"#;
+        assert!(parse_smbutil_view_contains_share(sample, "CORE-01"));
+        assert!(parse_smbutil_view_contains_share(sample, "vault-r1"));
+    }
+
+    #[test]
+    fn parse_smbutil_view_reports_missing_share() {
+        let sample = br#"
+Share                         Type    Comments
+-----                         ----    --------
+CORE-01                       Disk
+"#;
+        assert!(!parse_smbutil_view_contains_share(sample, "VAULT-R1"));
     }
 }

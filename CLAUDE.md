@@ -42,26 +42,26 @@ br sync               # Export to JSONL for git sync
    - `cargo build --release` passes with no unexpected errors
    - Any new warnings are addressed
 
-6. **BUILD AND INSTALL** - After successful build:
+6. **BUILD** - After successful build:
    ```bash
-   ./scripts/bundle-macos.sh && cp -R target/release/Mountaineer.app ~/Applications/
+   ./scripts/bundle-macos.sh && cp -R target/release/Mountaineer.app /Applications/
    ```
 7. **Complete**: Use `br close <id> --reason "Done"`
-8. **REFLECT** - Run the `/reflect` command to capture learnings
+8. **REFLECT and COMMIT** - Run the `/reflect` command to capture learnings
 
 9. **COMMIT** - Follow the "Landing the Plane" workflow below
 10. **Sync**: Always run `br sync` at session end
 11. **NOTIFY USER** - Tell the user:
-   - The app is ready to test at `~/Applications/Mountaineer.app`
+   - The app is ready to test at `/Applications/Mountaineer.app`
    - What was completed
    - Recommend the next task to work on
 
 ### Building and Installing (Testing and Verifying your work)
 
 #### When user says "build the app"
-Run the bundle script and install to ~/Applications:
+Run the bundle script and install to /Applications:
 ```bash
-./scripts/bundle-macos.sh && cp -R target/release/Mountaineer.app ~/Applications/
+./scripts/bundle-macos.sh && cp -R target/release/Mountaineer.app /Applications/
 ```
 
 #### Build App Bundle with Icon
@@ -71,16 +71,16 @@ Run the bundle script and install to ~/Applications:
 This builds a release binary and creates `target/release/Mountaineer.app` with the app icon.
 
 #### Install Location
-Install working versions to: **`~/Applications/Mountaineer.app`**
+Install working versions to: **`/Applications/Mountaineer.app`**
 
 ```bash
 # Just copy - this overwrites the existing app
-cp -R target/release/Mountaineer.app ~/Applications/
+cp -R target/release/Mountaineer.app /Applications/
 ```
 
 **Important:** Don't try to `rm -rf` the existing app first - it will fail with "Permission denied" due to macOS extended attributes. Just use `cp -R` directly, which overwrites the existing app without issues.
 
-**Note:** User is NOT in the admin group, so `/Applications/` is not writable. Use `~/Applications/` instead.
+**Why this works:** `/Applications` is group-writable by `admin`. Since the user is in the admin group, `cp -R` can write/overwrite files there without sudo. However, removing files created by macOS (with provenance attributes) requires elevated permissions.
 
 ### Landing the Plane (Session Completion)
 

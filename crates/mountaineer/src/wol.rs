@@ -5,7 +5,10 @@ use std::net::UdpSocket;
 fn parse_mac(mac: &str) -> Result<[u8; 6]> {
     let parts: Vec<&str> = mac.split(|c| c == ':' || c == '-').collect();
     if parts.len() != 6 {
-        bail!("Invalid MAC address: expected 6 octets, got {}", parts.len());
+        bail!(
+            "Invalid MAC address: expected 6 octets, got {}",
+            parts.len()
+        );
     }
 
     let mut bytes = [0u8; 6];

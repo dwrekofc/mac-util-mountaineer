@@ -1,6 +1,7 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 // ---------------------------------------------------------------------------
 // MountError
@@ -9,20 +10,34 @@ use std::process::Command;
 #[derive(Debug)]
 pub enum MountError {
     /// The mount point directory could not be created.
-    CreateMountPoint { path: PathBuf, source: std::io::Error },
+    CreateMountPoint {
+        path: PathBuf,
+        source: std::io::Error,
+    },
     /// The mount_smbfs command failed.
-    MountFailed { stderr: String, exit_code: Option<i32> },
+    MountFailed {
+        stderr: String,
+        exit_code: Option<i32>,
+    },
     /// Both diskutil and umount failed.
     UnmountFailed { stderr: String },
     /// The command binary could not be spawned.
-    CommandSpawn { command: String, source: std::io::Error },
+    CommandSpawn {
+        command: String,
+        source: std::io::Error,
+    },
 }
 
 impl fmt::Display for MountError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             MountError::CreateMountPoint { path, source } => {
-                write!(f, "failed to create mount point {}: {}", path.display(), source)
+                write!(
+                    f,
+                    "failed to create mount point {}: {}",
+                    path.display(),
+                    source
+                )
             }
             MountError::MountFailed { stderr, exit_code } => {
                 let code = exit_code.map_or("?".to_string(), |c| c.to_string());
@@ -54,38 +69,90 @@ impl std::error::Error for MountError {
 
 /// Mount a favorite share using macOS Keychain for authentication.
 ///
-/// For /Volumes/ mount points, uses `osascript -e 'mount volume "smb://..."'`
-/// which mounts silently via Finder (no window, no progress bar, no error dialog).
+/// For /Volumes/ mount points:
+///   1. If the mount point dir already exists, tries `mount_smbfs` first (always
+///      silent — no UI, no dialogs). This is the 99% path for reconnections since
+///      macOS keeps `/Volumes/ShareName` after the first mount.
+///   2. Falls back to `osascript mount volume` which can create the /Volumes/ dir
+///      (needed for brand-new first-time mounts only). Note: osascript may show
+///      Finder error dialogs if the share doesn't exist on the server.
+///
 /// For other mount points, uses `mount_smbfs //server/share /mount/point`.
 pub fn mount_favorite(fav: &crate::config::Favorite) -> Result<(), MountError> {
     let mount_point = Path::new(&fav.mount_point);
 
-    // /Volumes/ is SIP-protected — use AppleScript `mount volume` for silent mount
+    // /Volumes/ is SIP-protected — two-phase strategy for silent mounting
     if fav.mount_point.starts_with("/Volumes/") {
-        let script = format!("mount volume \"smb://{}/{}\"", fav.server, fav.share);
-        let output = Command::new("osascript")
-            .args(["-e", &script])
-            .output()
-            .map_err(|e| MountError::CommandSpawn {
-                command: "osascript".into(),
-                source: e,
-            })?;
+        // Phase 1: If mount point dir exists, use mount_smbfs (always silent)
+        if mount_point.exists() {
+            let smb_url = format!("//{}/{}", fav.server, fav.share);
+            let output = Command::new("mount_smbfs")
+                .arg(&smb_url)
+                .arg(mount_point)
+                .output()
+                .map_err(|e| MountError::CommandSpawn {
+                    command: "mount_smbfs".into(),
+                    source: e,
+                })?;
 
-        if output.status.success() {
-            log::info!(
-                "Mounted //{}/{} via osascript mount volume (silent)",
+            if output.status.success() {
+                log::info!(
+                    "Mounted //{}/{} via mount_smbfs (silent)",
+                    fav.server,
+                    fav.share,
+                );
+                return Ok(());
+            }
+
+            // mount_smbfs failed — do NOT fall through to osascript.
+            // The dir exists so osascript can't help (it's not a "missing dir" problem).
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            log::warn!(
+                "mount_smbfs failed for //{}/{}: {}",
                 fav.server,
                 fav.share,
+                stderr
             );
-            // osascript mount volume is synchronous — no sleep needed
-            Ok(())
-        } else {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            log::error!("osascript mount volume failed: {}", stderr);
-            Err(MountError::MountFailed {
+            return Err(MountError::MountFailed {
                 stderr,
                 exit_code: output.status.code(),
-            })
+            });
+        }
+
+        // Phase 2: Dir doesn't exist — preflight share availability.
+        let share_check = crate::discovery::check_share_available(
+            &fav.server,
+            &fav.share,
+            Duration::from_secs(2),
+        );
+        match decide_missing_volumes_dir_action(&share_check) {
+            MissingVolumesDirAction::SkipNotFound => {
+                let msg = format!("share '{}' not found on server '{}'", fav.share, fav.server);
+                log::warn!("{}", msg);
+                Err(MountError::MountFailed {
+                    stderr: msg,
+                    exit_code: None,
+                })
+            }
+            MissingVolumesDirAction::AttemptMount => {
+                match share_check {
+                    crate::discovery::ShareCheckResult::Available => {
+                        log::info!(
+                            "{}: /Volumes/ dir missing, using osascript (share verified on server)",
+                            fav.share
+                        );
+                    }
+                    crate::discovery::ShareCheckResult::Unknown { reason } => {
+                        log::warn!(
+                            "{}: share preflight unavailable ({}), attempting osascript mount anyway",
+                            fav.share,
+                            reason
+                        );
+                    }
+                    crate::discovery::ShareCheckResult::NotFound => {}
+                }
+                mount_via_osascript(fav)
+            }
         }
     } else {
         // Non-/Volumes/ mount point — use mount_smbfs directly
@@ -121,6 +188,51 @@ pub fn mount_favorite(fav: &crate::config::Favorite) -> Result<(), MountError> {
                 stderr,
                 exit_code: output.status.code(),
             })
+        }
+    }
+}
+
+fn mount_via_osascript(fav: &crate::config::Favorite) -> Result<(), MountError> {
+    let script = format!(r#"mount volume "smb://{}/{}""#, fav.server, fav.share);
+    let output = Command::new("osascript")
+        .args(["-e", &script])
+        .output()
+        .map_err(|e| MountError::CommandSpawn {
+            command: "osascript".into(),
+            source: e,
+        })?;
+
+    if output.status.success() {
+        log::info!(
+            "Mounted //{}/{} via osascript (dir created)",
+            fav.server,
+            fav.share
+        );
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        log::error!("osascript mount volume failed: {}", stderr);
+        Err(MountError::MountFailed {
+            stderr,
+            exit_code: output.status.code(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MissingVolumesDirAction {
+    AttemptMount,
+    SkipNotFound,
+}
+
+fn decide_missing_volumes_dir_action(
+    check: &crate::discovery::ShareCheckResult,
+) -> MissingVolumesDirAction {
+    match check {
+        crate::discovery::ShareCheckResult::NotFound => MissingVolumesDirAction::SkipNotFound,
+        crate::discovery::ShareCheckResult::Available
+        | crate::discovery::ShareCheckResult::Unknown { .. } => {
+            MissingVolumesDirAction::AttemptMount
         }
     }
 }
@@ -231,7 +343,10 @@ mod tests {
             stderr: "permission denied".into(),
             exit_code: Some(1),
         };
-        assert_eq!(err.to_string(), "mount_smbfs failed (exit 1): permission denied");
+        assert_eq!(
+            err.to_string(),
+            "mount_smbfs failed (exit 1): permission denied"
+        );
 
         let err = MountError::UnmountFailed {
             stderr: "not mounted".into(),
@@ -246,5 +361,25 @@ mod tests {
             exit_code: None,
         };
         assert_eq!(err.to_string(), "mount_smbfs failed (exit ?): signal");
+    }
+
+    #[test]
+    fn missing_volumes_dir_action_for_not_found() {
+        let action =
+            decide_missing_volumes_dir_action(&crate::discovery::ShareCheckResult::NotFound);
+        assert_eq!(action, MissingVolumesDirAction::SkipNotFound);
+    }
+
+    #[test]
+    fn missing_volumes_dir_action_for_available_or_unknown() {
+        let available =
+            decide_missing_volumes_dir_action(&crate::discovery::ShareCheckResult::Available);
+        assert_eq!(available, MissingVolumesDirAction::AttemptMount);
+
+        let unknown =
+            decide_missing_volumes_dir_action(&crate::discovery::ShareCheckResult::Unknown {
+                reason: "timeout".to_string(),
+            });
+        assert_eq!(unknown, MissingVolumesDirAction::AttemptMount);
     }
 }
