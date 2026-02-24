@@ -1,6 +1,10 @@
 [workspace]
 members = ["crates/mountaineer"]
 default-members = ["crates/mountaineer"]
+exclude = [
+    "third_party/zed_gpui_refs/gpui-component-main",
+    "third_party/zed_gpui_refs/zed-main",
+]
 resolver = "2"
 
 [workspace.dependencies]
@@ -8,6 +12,7 @@ mountaineer = { path = "crates/mountaineer" }
 system-configuration = "0.6"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+toml = "0.8"
 log = "0.4"
 env_logger = "0.11"
 dirs = "5"
@@ -15,10 +20,8 @@ clap = { version = "4", features = ["derive"] }
 anyhow = "1.0"
 nix = { version = "0.30", features = ["net"] }
 core-foundation = "0.9"
-gpui = { git = "https://github.com/zed-industries/zed" }
-gpui_component = { path = "/Users/I852000/ai/refs/zed_gpui/gpui-component-main/crates/ui", package = "gpui-component" }
-gpui_component_assets = { path = "/Users/I852000/ai/refs/zed_gpui/gpui-component-main/crates/assets", package = "gpui-component-assets" }
+gpui = { git = "https://github.com/zed-industries/zed", default-features = false }
 tray-icon = "0.19"
 
-[patch.crates-io]
-zed-font-kit = { git = "https://github.com/zed-industries/font-kit", rev = "110523127440aefb11ce0cf280ae7c5071337ec5" }
+[patch."https://github.com/zed-industries/zed"]
+gpui = { path = "third_party/zed_gpui_refs/zed-main/crates/gpui" }

@@ -1,27 +1,22 @@
 use std::fmt;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Duration;
-
-// ---------------------------------------------------------------------------
-// MountError
-// ---------------------------------------------------------------------------
+use std::time::{Duration, Instant};
 
 #[derive(Debug)]
 pub enum MountError {
-    /// The mount point directory could not be created.
     CreateMountPoint {
         path: PathBuf,
         source: std::io::Error,
     },
-    /// The mount_smbfs command failed.
     MountFailed {
         stderr: String,
         exit_code: Option<i32>,
     },
-    /// Both diskutil and umount failed.
-    UnmountFailed { stderr: String },
-    /// The command binary could not be spawned.
+    UnmountFailed {
+        stderr: String,
+    },
     CommandSpawn {
         command: String,
         source: std::io::Error,
@@ -40,12 +35,10 @@ impl fmt::Display for MountError {
                 )
             }
             MountError::MountFailed { stderr, exit_code } => {
-                let code = exit_code.map_or("?".to_string(), |c| c.to_string());
-                write!(f, "mount_smbfs failed (exit {}): {}", code, stderr)
+                let code = exit_code.map_or_else(|| "?".to_string(), |code| code.to_string());
+                write!(f, "mount failed (exit {}): {}", code, stderr)
             }
-            MountError::UnmountFailed { stderr } => {
-                write!(f, "unmount failed: {}", stderr)
-            }
+            MountError::UnmountFailed { stderr } => write!(f, "unmount failed: {}", stderr),
             MountError::CommandSpawn { command, source } => {
                 write!(f, "failed to spawn {}: {}", command, source)
             }
@@ -63,188 +56,75 @@ impl std::error::Error for MountError {
     }
 }
 
-// ---------------------------------------------------------------------------
-// mount_favorite — Keychain-based mount (no explicit credentials)
-// ---------------------------------------------------------------------------
+pub fn mount_share(
+    host: &str,
+    share: &str,
+    username: &str,
+    mount_point: &Path,
+) -> Result<(), MountError> {
+    if let Some(existing_mount) = find_existing_mount_for_share(host, share) {
+        adopt_existing_mount(mount_point, &existing_mount)?;
+        return Ok(());
+    }
 
-/// Mount a favorite share using macOS Keychain for authentication.
-///
-/// For /Volumes/ mount points:
-///   1. If the mount point dir already exists, tries `mount_smbfs` first (always
-///      silent — no UI, no dialogs). This is the 99% path for reconnections since
-///      macOS keeps `/Volumes/ShareName` after the first mount.
-///   2. Falls back to `osascript mount volume` which can create the /Volumes/ dir
-///      (needed for brand-new first-time mounts only). Note: osascript may show
-///      Finder error dialogs if the share doesn't exist on the server.
-///
-/// For other mount points, uses `mount_smbfs //server/share /mount/point`.
-pub fn mount_favorite(fav: &crate::config::Favorite) -> Result<(), MountError> {
-    let mount_point = Path::new(&fav.mount_point);
-
-    // /Volumes/ is SIP-protected — two-phase strategy for silent mounting
-    if fav.mount_point.starts_with("/Volumes/") {
-        // Phase 1: If mount point dir exists, use mount_smbfs (always silent)
-        if mount_point.exists() {
-            let smb_url = format!("//{}/{}", fav.server, fav.share);
-            let output = Command::new("mount_smbfs")
-                .arg(&smb_url)
-                .arg(mount_point)
-                .output()
-                .map_err(|e| MountError::CommandSpawn {
-                    command: "mount_smbfs".into(),
-                    source: e,
-                })?;
-
-            if output.status.success() {
-                log::info!(
-                    "Mounted //{}/{} via mount_smbfs (silent)",
-                    fav.server,
-                    fav.share,
-                );
+    // Prefer Finder-backed AppleScript mount for less disruptive UX.
+    // If it fails or doesn't yield a detectable mount entry, fall back to mount_smbfs.
+    let osascript_error = match try_osascript_mount(host, share, username) {
+        Ok(()) => {
+            if let Some(existing_mount) =
+                wait_for_existing_mount_for_share(host, share, Duration::from_secs(2))
+            {
+                adopt_existing_mount(mount_point, &existing_mount)?;
                 return Ok(());
             }
-
-            // mount_smbfs failed — do NOT fall through to osascript.
-            // The dir exists so osascript can't help (it's not a "missing dir" problem).
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            log::warn!(
-                "mount_smbfs failed for //{}/{}: {}",
-                fav.server,
-                fav.share,
-                stderr
-            );
-            return Err(MountError::MountFailed {
-                stderr,
-                exit_code: output.status.code(),
-            });
+            Some("osascript mount returned success but no detectable share path".to_string())
         }
+        Err(err) => Some(format!("osascript mount failed: {}", err)),
+    };
 
-        // Phase 2: Dir doesn't exist — preflight share availability.
-        let share_check = crate::discovery::check_share_available(
-            &fav.server,
-            &fav.share,
-            Duration::from_secs(2),
-        );
-        match decide_missing_volumes_dir_action(&share_check) {
-            MissingVolumesDirAction::SkipNotFound => {
-                let msg = format!("share '{}' not found on server '{}'", fav.share, fav.server);
-                log::warn!("{}", msg);
-                Err(MountError::MountFailed {
-                    stderr: msg,
-                    exit_code: None,
-                })
-            }
-            MissingVolumesDirAction::AttemptMount => {
-                match share_check {
-                    crate::discovery::ShareCheckResult::Available => {
-                        log::info!(
-                            "{}: /Volumes/ dir missing, using osascript (share verified on server)",
-                            fav.share
-                        );
-                    }
-                    crate::discovery::ShareCheckResult::Unknown { reason } => {
-                        log::warn!(
-                            "{}: share preflight unavailable ({}), attempting osascript mount anyway",
-                            fav.share,
-                            reason
-                        );
-                    }
-                    crate::discovery::ShareCheckResult::NotFound => {}
-                }
-                mount_via_osascript(fav)
-            }
-        }
-    } else {
-        // Non-/Volumes/ mount point — use mount_smbfs directly
-        if !mount_point.exists() {
-            std::fs::create_dir_all(mount_point).map_err(|e| MountError::CreateMountPoint {
-                path: mount_point.to_path_buf(),
-                source: e,
-            })?;
-        }
+    ensure_mount_point_dir(mount_point)?;
 
-        let smb_url = format!("//{}/{}", fav.server, fav.share);
-        let output = Command::new("mount_smbfs")
-            .arg(&smb_url)
-            .arg(mount_point)
-            .output()
-            .map_err(|e| MountError::CommandSpawn {
-                command: "mount_smbfs".into(),
-                source: e,
-            })?;
-
-        if output.status.success() {
-            log::info!(
-                "Mounted //{}/{} at {}",
-                fav.server,
-                fav.share,
-                mount_point.display(),
-            );
-            Ok(())
-        } else {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            log::error!("mount_smbfs failed: {}", stderr);
-            Err(MountError::MountFailed {
-                stderr,
-                exit_code: output.status.code(),
-            })
-        }
-    }
-}
-
-fn mount_via_osascript(fav: &crate::config::Favorite) -> Result<(), MountError> {
-    let script = format!(r#"mount volume "smb://{}/{}""#, fav.server, fav.share);
-    let output = Command::new("osascript")
-        .args(["-e", &script])
+    let url = build_smb_url(host, share, username);
+    let output = Command::new("mount_smbfs")
+        .arg(&url)
+        .arg(mount_point)
         .output()
-        .map_err(|e| MountError::CommandSpawn {
-            command: "osascript".into(),
-            source: e,
+        .map_err(|source| MountError::CommandSpawn {
+            command: "mount_smbfs".to_string(),
+            source,
         })?;
 
     if output.status.success() {
-        log::info!(
-            "Mounted //{}/{} via osascript (dir created)",
-            fav.server,
-            fav.share
-        );
-        Ok(())
+        return Ok(());
+    }
+
+    let original_stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let original_exit = output.status.code();
+
+    // If Finder mounted the share elsewhere, adopt that mount path.
+    if let Some(existing_mount) = find_existing_mount_for_share(host, share) {
+        adopt_existing_mount(mount_point, &existing_mount)?;
+        return Ok(());
+    }
+
+    let mut combined = osascript_error.unwrap_or_else(|| "osascript mount failed".to_string());
+    combined.push_str("; mount_smbfs fallback failed: ");
+    combined.push_str(&original_stderr);
+    Err(MountError::MountFailed {
+        stderr: combined,
+        exit_code: original_exit,
+    })
+}
+
+fn build_smb_url(host: &str, share: &str, username: &str) -> String {
+    if username.trim().is_empty() {
+        format!("//{}/{}", host, share)
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        log::error!("osascript mount volume failed: {}", stderr);
-        Err(MountError::MountFailed {
-            stderr,
-            exit_code: output.status.code(),
-        })
+        format!("//{}@{}/{}", username, host, share)
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MissingVolumesDirAction {
-    AttemptMount,
-    SkipNotFound,
-}
-
-fn decide_missing_volumes_dir_action(
-    check: &crate::discovery::ShareCheckResult,
-) -> MissingVolumesDirAction {
-    match check {
-        crate::discovery::ShareCheckResult::NotFound => MissingVolumesDirAction::SkipNotFound,
-        crate::discovery::ShareCheckResult::Available
-        | crate::discovery::ShareCheckResult::Unknown { .. } => {
-            MissingVolumesDirAction::AttemptMount
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// is_mount_alive — stale mount detection
-// ---------------------------------------------------------------------------
-
-/// Check if a mount point is actually alive (not stale).
-/// Spawns a thread to call `std::fs::metadata` with a 2-second timeout.
-/// Returns `false` if the metadata call hangs (stale mount) or errors.
-pub fn is_mount_alive(mount_point: &std::path::Path) -> bool {
+pub fn is_mount_alive(mount_point: &Path) -> bool {
     let (tx, rx) = std::sync::mpsc::channel();
     let path = mount_point.to_path_buf();
 
@@ -256,15 +136,9 @@ pub fn is_mount_alive(mount_point: &std::path::Path) -> bool {
         .unwrap_or(false)
 }
 
-// ---------------------------------------------------------------------------
-// is_mounted
-// ---------------------------------------------------------------------------
-
-/// Check if a path is currently an active SMB mount point.
-#[allow(dead_code)]
 pub fn is_mounted(mount_point: &Path) -> bool {
-    let output = match Command::new("mount").arg("-t").arg("smbfs").output() {
-        Ok(out) => out,
+    let output = match Command::new("mount").args(["-t", "smbfs"]).output() {
+        Ok(output) => output,
         Err(_) => return false,
     };
 
@@ -273,113 +147,277 @@ pub fn is_mounted(mount_point: &Path) -> bool {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let target = mount_point.to_string_lossy();
-    stdout.lines().any(|line| line.contains(&*target))
+    let adopted_target = resolve_symlink_target(mount_point);
+
+    stdout.lines().any(|line| {
+        let Some((_host, _share, current_mount)) = parse_mount_smb_line(line) else {
+            return false;
+        };
+
+        paths_match(&current_mount, mount_point)
+            || adopted_target
+                .as_ref()
+                .is_some_and(|target| paths_match(&current_mount, target))
+    })
 }
 
-// ---------------------------------------------------------------------------
-// unmount
-// ---------------------------------------------------------------------------
-
-/// Unmount a mounted share.
-///
-/// Tries `diskutil unmount force` first. If that fails, falls back to `umount -f`.
 pub fn unmount(mount_point: &Path) -> Result<(), MountError> {
-    // Primary: diskutil unmount force
-    let output = Command::new("diskutil")
-        .args(["unmount", "force"])
-        .arg(mount_point)
-        .output()
-        .map_err(|e| MountError::CommandSpawn {
-            command: "diskutil".into(),
-            source: e,
-        })?;
+    unmount_impl(mount_point, true)
+}
 
-    if output.status.success() {
-        log::info!("Unmounted {} via diskutil", mount_point.display());
+pub fn unmount_graceful(mount_point: &Path) -> Result<(), MountError> {
+    unmount_impl(mount_point, false)
+}
+
+fn unmount_impl(mount_point: &Path, force: bool) -> Result<(), MountError> {
+    let unmount_target = resolve_symlink_target(mount_point).unwrap_or_else(|| mount_point.into());
+
+    let diskutil = if force {
+        Command::new("diskutil")
+            .args(["unmount", "force"])
+            .arg(&unmount_target)
+            .output()
+    } else {
+        Command::new("diskutil")
+            .arg("unmount")
+            .arg(&unmount_target)
+            .output()
+    }
+    .map_err(|source| MountError::CommandSpawn {
+        command: "diskutil".to_string(),
+        source,
+    })?;
+
+    if diskutil.status.success() {
         return Ok(());
     }
 
-    let diskutil_err = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    log::warn!(
-        "diskutil unmount failed for {}: {} — trying umount -f",
-        mount_point.display(),
-        diskutil_err,
-    );
+    let diskutil_err = String::from_utf8_lossy(&diskutil.stderr).trim().to_string();
+    let umount = if force {
+        Command::new("umount")
+            .arg("-f")
+            .arg(&unmount_target)
+            .output()
+    } else {
+        Command::new("umount").arg(&unmount_target).output()
+    }
+    .map_err(|source| MountError::CommandSpawn {
+        command: "umount".to_string(),
+        source,
+    })?;
 
-    // Fallback: umount -f
-    let output = Command::new("umount")
-        .arg("-f")
-        .arg(mount_point)
-        .output()
-        .map_err(|e| MountError::CommandSpawn {
-            command: "umount".into(),
-            source: e,
-        })?;
-
-    if output.status.success() {
-        log::info!("Unmounted {} via umount -f", mount_point.display());
+    if umount.status.success() {
         Ok(())
     } else {
-        let umount_err = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        log::error!("Both unmount methods failed for {}", mount_point.display());
+        let umount_err = String::from_utf8_lossy(&umount.stderr).trim().to_string();
+        let mode = if force { "force" } else { "graceful" };
         Err(MountError::UnmountFailed {
-            stderr: format!("diskutil: {}; umount: {}", diskutil_err, umount_err),
+            stderr: format!(
+                "{} unmount failed; diskutil: {}; umount: {}",
+                mode, diskutil_err, umount_err
+            ),
         })
     }
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
+fn ensure_mount_point_dir(mount_point: &Path) -> Result<(), MountError> {
+    if fs::symlink_metadata(mount_point).is_ok() {
+        return Ok(());
+    }
+
+    fs::create_dir_all(mount_point).map_err(|source| MountError::CreateMountPoint {
+        path: mount_point.to_path_buf(),
+        source,
+    })
+}
+
+fn try_osascript_mount(host: &str, share: &str, username: &str) -> Result<(), String> {
+    let smb_url = if username.trim().is_empty() {
+        format!("smb://{}/{}", host, share)
+    } else {
+        format!("smb://{}@{}/{}", username, host, share)
+    };
+    let script = format!(
+        r#"tell application "Finder"
+mount volume "{}"
+end tell"#,
+        smb_url
+    );
+
+    let output = Command::new("osascript")
+        .args(["-e", &script])
+        .output()
+        .map_err(|err| format!("failed to run osascript: {}", err))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+fn wait_for_existing_mount_for_share(
+    host: &str,
+    share: &str,
+    timeout: Duration,
+) -> Option<PathBuf> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(path) = find_existing_mount_for_share(host, share) {
+            return Some(path);
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn adopt_existing_mount(mount_point: &Path, existing_mount: &Path) -> Result<(), MountError> {
+    if paths_match(mount_point, existing_mount) {
+        return Ok(());
+    }
+
+    if let Some(parent) = mount_point.parent() {
+        fs::create_dir_all(parent).map_err(|source| MountError::CreateMountPoint {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+    }
+
+    if let Ok(meta) = fs::symlink_metadata(mount_point) {
+        if meta.file_type().is_symlink() {
+            if let Some(current_target) = resolve_symlink_target(mount_point) {
+                if paths_match(&current_target, existing_mount) {
+                    return Ok(());
+                }
+            }
+            fs::remove_file(mount_point).map_err(|err| MountError::MountFailed {
+                stderr: format!(
+                    "failed clearing stale mountpoint symlink {}: {}",
+                    mount_point.display(),
+                    err
+                ),
+                exit_code: None,
+            })?;
+        } else if meta.file_type().is_dir() {
+            if paths_match(mount_point, existing_mount) {
+                return Ok(());
+            }
+            fs::remove_dir(mount_point).map_err(|err| MountError::MountFailed {
+                stderr: format!(
+                    "failed clearing mountpoint directory {} before adopt: {}",
+                    mount_point.display(),
+                    err
+                ),
+                exit_code: None,
+            })?;
+        } else {
+            fs::remove_file(mount_point).map_err(|err| MountError::MountFailed {
+                stderr: format!(
+                    "failed clearing mountpoint file {} before adopt: {}",
+                    mount_point.display(),
+                    err
+                ),
+                exit_code: None,
+            })?;
+        }
+    }
+
+    std::os::unix::fs::symlink(existing_mount, mount_point).map_err(|err| {
+        MountError::MountFailed {
+            stderr: format!(
+                "failed adopting existing mount {} -> {}: {}",
+                mount_point.display(),
+                existing_mount.display(),
+                err
+            ),
+            exit_code: None,
+        }
+    })?;
+
+    Ok(())
+}
+
+fn find_existing_mount_for_share(host: &str, share: &str) -> Option<PathBuf> {
+    let output = Command::new("mount").args(["-t", "smbfs"]).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(parse_mount_smb_line)
+        .find(|(current_host, current_share, _)| {
+            current_host.eq_ignore_ascii_case(host) && current_share.eq_ignore_ascii_case(share)
+        })
+        .map(|(_, _, mount_path)| mount_path)
+}
+
+fn parse_mount_smb_line(line: &str) -> Option<(String, String, PathBuf)> {
+    let (left, right) = line.split_once(" on ")?;
+    let (mount_path, _flags) = right.split_once(" (")?;
+
+    let smb = left.strip_prefix("//")?;
+    let smb = smb.split_once('@').map_or(smb, |(_, rest)| rest);
+    let (host, share) = smb.split_once('/')?;
+
+    Some((
+        host.to_string(),
+        share.to_string(),
+        PathBuf::from(mount_path),
+    ))
+}
+
+fn resolve_symlink_target(path: &Path) -> Option<PathBuf> {
+    let raw = fs::read_link(path).ok()?;
+    if raw.is_absolute() {
+        return Some(raw);
+    }
+    path.parent().map(|parent| parent.join(raw))
+}
+
+fn paths_match(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
+    }
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(ca), Ok(cb)) => ca == cb,
+        _ => false,
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn mount_error_display() {
-        let err = MountError::MountFailed {
-            stderr: "permission denied".into(),
-            exit_code: Some(1),
-        };
+    fn build_url_with_user() {
         assert_eq!(
-            err.to_string(),
-            "mount_smbfs failed (exit 1): permission denied"
+            build_smb_url("server.local", "CORE", "user"),
+            "//user@server.local/CORE"
         );
-
-        let err = MountError::UnmountFailed {
-            stderr: "not mounted".into(),
-        };
-        assert_eq!(err.to_string(), "unmount failed: not mounted");
     }
 
     #[test]
-    fn mount_error_display_unknown_exit() {
-        let err = MountError::MountFailed {
-            stderr: "signal".into(),
-            exit_code: None,
-        };
-        assert_eq!(err.to_string(), "mount_smbfs failed (exit ?): signal");
+    fn build_url_without_user() {
+        assert_eq!(build_smb_url("10.10.10.1", "CORE", ""), "//10.10.10.1/CORE");
     }
 
     #[test]
-    fn missing_volumes_dir_action_for_not_found() {
-        let action =
-            decide_missing_volumes_dir_action(&crate::discovery::ShareCheckResult::NotFound);
-        assert_eq!(action, MissingVolumesDirAction::SkipNotFound);
+    fn parse_mount_smb_line_with_user_prefix() {
+        let line = "//user@10.10.10.1/CORE on /Volumes/CORE (smbfs, nodev)";
+        let (host, share, mount_path) = parse_mount_smb_line(line).unwrap();
+        assert_eq!(host, "10.10.10.1");
+        assert_eq!(share, "CORE");
+        assert_eq!(mount_path, PathBuf::from("/Volumes/CORE"));
     }
 
     #[test]
-    fn missing_volumes_dir_action_for_available_or_unknown() {
-        let available =
-            decide_missing_volumes_dir_action(&crate::discovery::ShareCheckResult::Available);
-        assert_eq!(available, MissingVolumesDirAction::AttemptMount);
-
-        let unknown =
-            decide_missing_volumes_dir_action(&crate::discovery::ShareCheckResult::Unknown {
-                reason: "timeout".to_string(),
-            });
-        assert_eq!(unknown, MissingVolumesDirAction::AttemptMount);
+    fn parse_mount_smb_line_without_user_prefix() {
+        let line = "//macmini.local/VAULT-R1 on /tmp/vault (smbfs, nodev)";
+        let (host, share, mount_path) = parse_mount_smb_line(line).unwrap();
+        assert_eq!(host, "macmini.local");
+        assert_eq!(share, "VAULT-R1");
+        assert_eq!(mount_path, PathBuf::from("/tmp/vault"));
     }
 }

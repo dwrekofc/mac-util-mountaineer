@@ -1,7 +1,13 @@
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
+
+use crate::config::Backend;
 
 #[derive(Parser)]
-#[command(name = "mountaineer", about = "SMB share favorites manager", version)]
+#[command(
+    name = "mountaineer",
+    about = "Mountaineer V2 SMB failover manager",
+    version
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -9,44 +15,135 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// List currently mounted SMB shares with connection details
-    List,
-    /// Show saved favorites with their current status
-    Favorites,
-    /// Add a currently mounted share to favorites
-    Add {
-        /// Share name (e.g. CORE-01)
-        share: String,
-        /// MAC address for Wake-on-LAN (e.g. d0:11:e5:13:af:1f)
+    /// Single reconciliation pass for all configured shares
+    Reconcile {
         #[arg(long)]
-        mac: Option<String>,
+        all: bool,
     },
-    /// Remove a share from favorites
-    Remove {
-        /// Share name to remove
+    /// Continuous monitor loop with periodic reconcile
+    Monitor {
+        #[arg(long)]
+        interval: Option<u64>,
+    },
+    /// Show share status and active backend
+    Status {
+        #[arg(long)]
+        all: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Manual backend switch for one share
+    Switch {
+        #[arg(long)]
         share: String,
+        #[arg(long)]
+        to: Backend,
     },
-    /// Mount all favorites (or a specific one)
+    /// Ensure backend mounts exist
+    MountBackends(MultiShareTarget),
+    /// Health and mountpoint checks only
+    Verify {
+        #[command(flatten)]
+        target: MultiShareTarget,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Mount/load all managed favorite drives
     Mount {
-        /// Specific share name to mount (omit for all)
-        share: Option<String>,
+        #[arg(long)]
+        all: bool,
     },
-    /// Unmount a specific share
+    /// Unmount/unload all managed favorite drives
     Unmount {
-        /// Share name to unmount
-        share: String,
+        #[arg(long)]
+        all: bool,
     },
-    /// Show detailed status of all favorites
-    Status,
-    /// Send Wake-on-LAN packet to a server
-    Wake {
-        /// Share name (MAC address looked up from config)
+    /// List folders via stable share path
+    Folders {
+        #[arg(long)]
         share: String,
+        #[arg(long)]
+        subpath: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
-    /// Watch mode: auto-mount favorites, remount on network changes
-    Watch,
+    Alias {
+        #[command(subcommand)]
+        command: AliasCommand,
+    },
+    Favorites {
+        #[command(subcommand)]
+        command: FavoritesCommand,
+    },
     /// Install LaunchAgent to start Mountaineer at login
     Install,
-    /// Uninstall LaunchAgent (stop starting at login)
+    /// Remove LaunchAgent
     Uninstall,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct MultiShareTarget {
+    #[arg(long, conflicts_with = "share")]
+    pub all: bool,
+    #[arg(long)]
+    pub share: Option<String>,
+}
+
+#[derive(Subcommand)]
+pub enum AliasCommand {
+    /// Create a managed alias for a subfolder under a stable share path
+    Add {
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        share: String,
+        #[arg(long)]
+        target_subpath: String,
+        #[arg(long)]
+        alias_path: Option<String>,
+    },
+    /// List configured aliases and their health
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove managed alias by name
+    Remove {
+        #[arg(long)]
+        name: String,
+    },
+    /// Validate and repair aliases
+    Reconcile {
+        #[arg(long)]
+        all: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum FavoritesCommand {
+    /// Add or update a managed drive favorite
+    Add {
+        #[arg(long)]
+        share: String,
+        #[arg(long = "tb-host")]
+        tb_host: String,
+        #[arg(long = "fallback-host")]
+        fallback_host: String,
+        #[arg(long)]
+        username: String,
+        #[arg(long = "remote-share")]
+        remote_share: Option<String>,
+    },
+    /// Remove a managed favorite
+    Remove {
+        #[arg(long)]
+        share: String,
+        #[arg(long)]
+        cleanup: bool,
+    },
+    /// List managed favorites
+    List {
+        #[arg(long)]
+        json: bool,
+    },
 }

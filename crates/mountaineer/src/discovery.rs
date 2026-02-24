@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::io::Read;
 use std::net::{TcpStream, ToSocketAddrs};
@@ -263,13 +265,17 @@ pub fn discover_mac_address(server: &str) -> Option<String> {
 /// More accurate than ICMP ping for mount decisions — a server can respond
 /// to ping while SMB is down. Uses a 2-second connect timeout.
 pub fn is_smb_reachable(server: &str) -> bool {
+    is_smb_reachable_with_timeout(server, Duration::from_secs(2))
+}
+
+pub fn is_smb_reachable_with_timeout(server: &str, timeout: Duration) -> bool {
     let addr = format!("{}:445", server);
     let addrs: Vec<_> = match addr.to_socket_addrs() {
         Ok(a) => a.collect(),
         Err(_) => return false,
     };
     for sock_addr in addrs {
-        if TcpStream::connect_timeout(&sock_addr, Duration::from_secs(2)).is_ok() {
+        if TcpStream::connect_timeout(&sock_addr, timeout).is_ok() {
             return true;
         }
     }

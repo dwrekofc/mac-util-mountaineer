@@ -176,9 +176,9 @@ When you encounter issues, check `progress.txt` first—it contains documented s
 **See also:** [GPUI-DESIGN.md](./GPUI-DESIGN.md) for the GPUI mental model and research playbook
 
 ## Reference Repositories
-- GPUI components: `/Users/I852000/ai/refs/zed_gpui/gpui-component-main`
-- Zed app patterns: `/Users/I852000/ai/refs/zed_gpui/zed-main`
-- Project scaffolding: `/Users/I852000/ai/refs/zed_gpui/create-gpui-app-main`
+- GPUI components: `third_party/zed_gpui_refs/gpui-component-main`
+- Zed app patterns: `third_party/zed_gpui_refs/zed-main`
+- Project scaffolding: `third_party/zed_gpui_refs/create-gpui-app-main`
 - **GPUI Design Guide:** [GPUI-DESIGN.md](./GPUI-DESIGN.md) — mental model, research playbook, styling reference
 
 ## GPUI Theme System
