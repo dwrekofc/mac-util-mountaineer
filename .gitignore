@@ -1,7 +1,26 @@
-/target
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
 *.swp
 *.swo
-.DS_Store
-.ralph-tui/
-.zed/
-third_party/
+*~
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Ralph
+# (keep loop.sh, prompts, and plans in git)
+logs/
+
+# Build
+target/
+*.pdb
+
+# Cargo
+Cargo.lock
