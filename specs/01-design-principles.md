@@ -7,10 +7,10 @@ Cross-cutting architecture invariants, conventions, and constraints that govern 
 - Enforce single-mount architecture: only ONE interface (Thunderbolt or Fallback) mounts a given share at any time
 - Mount paths are always `/Volumes/<SHARE>`, managed by macOS — Mountaineer never creates its own mount point directories
 - Stable user paths follow the pattern `~/Shares/<SHARE> → /Volumes/<SHARE>`
-- All Mountaineer-managed files live under `~/.mountaineer/` (config, state, any runtime data)
+- All Mountaineer-managed files live under `~/.mountaineer/` (config, state, any runtime data) `[needs-clarification: code currently uses ~/.config/mountaineer/ — see Notes]`
 - Log to `~/Library/Logs/mountaineer.log` following macOS conventions
 - Engine and CLI are implemented in Rust (edition 2024)
-- Menu bar UI uses native Swift or a lightweight framework — NOT GPUI
+- Menu bar UI uses a lightweight framework suitable for menu-bar-only operation `[needs-clarification: reqs say "not GPUI" but code currently uses GPUI — see Notes]`
 - UI is optional; CLI remains fully functional and independently supported
 - All UI actions call the same engine functions as CLI — no separate code paths
 - Support multiple shares from config (e.g., `CORE`, `VAULT-R1`)
@@ -31,3 +31,12 @@ Cross-cutting architecture invariants, conventions, and constraints that govern 
 3. `~/.mountaineer/` directory contains `config.toml` and `state.json`
 4. CLI works end-to-end without the menu bar UI running
 5. Every UI action in Phase 2 calls the same Rust engine function as the corresponding CLI command
+
+## References
+- `.planning/reqs-001.md` — Core Design §1 (Single-Mount Architecture), Non-Goals
+- `.planning/decisions-001.md` — Single-Mount Architecture decision, Phase 2 UI decision
+
+## Notes
+- **Config path mismatch** `[observed from code]`: Code uses `~/.config/mountaineer/` for config.toml and state.json instead of the spec's `~/.mountaineer/`. Needs alignment.
+- **UI framework mismatch** `[observed from code]`: Code uses GPUI (from Zed) for the menu bar UI (`gui.rs`, `tray.rs`). The reqs state "NOT GPUI", but the working implementation uses it. Needs decision on whether to keep GPUI or migrate.
+- **Dual-mount code still present** `[observed from code]`: `engine.rs` retains `choose_desired_backend()` for dual-mount mode, controlled by a `single_mount_mode` config toggle (default true). The spec and reqs treat single-mount as the only architecture — the dual-mount code path should be removed or clearly marked as deprecated.

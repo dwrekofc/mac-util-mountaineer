@@ -26,3 +26,10 @@ Provides one-click Thunderbolt recovery from the menu bar when TB becomes availa
 4. Menu updates immediately after a successful switch (shows TB as active)
 5. Menu shows an error if the switch fails
 6. Button is hidden when TB is unavailable or already active
+
+## References
+- `.planning/reqs-001.md` — JTBD 12
+
+## Notes
+- **Partially implemented** `[observed from code]`: `tray.rs` builds a "Switch to TB" menu item (`"⚡ Switch to TB (available)"`) when `tb_recovery_pending` is true. The item calls `handle_switch` which invokes `engine::switch_backend_single_mount`. On `BusyOpenFiles`, it logs a warning but does not display a UI warning or force-switch option in the menu. The force-switch and open-file-count display are not yet implemented.
+- **No in-progress indicator** `[observed from code]`: The switch is synchronous within `handle_switch` — there is no intermediate "switching..." state in the menu. The menu rebuilds after the operation completes.

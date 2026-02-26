@@ -33,3 +33,10 @@ Provides detailed, structured logging of all state transitions, mount operations
 4. `last_error` per share is visible in `status` output and updated on each error
 5. `RUST_LOG=debug` increases log verbosity
 6. Log file is written with immediate flush (no buffering delays)
+
+## References
+- `.planning/reqs-001.md` — JTBD 11, Logging and Observability
+
+## Notes
+- **`MultiWriter` pattern** `[observed from code]`: CLI mode uses a `MultiWriter` struct that implements `Write` and dispatches to both stderr and a `LineWriter<File>`. This cleanly satisfies the dual-output requirement.
+- **CLI log level enforcement** `[observed from code]`: CLI mode forces the `mountaineer` module to `Info` level regardless of `RUST_LOG` setting. This ensures core operational logs are always visible. Debug can be enabled via `RUST_LOG=debug` for other modules.

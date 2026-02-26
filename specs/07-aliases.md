@@ -30,3 +30,9 @@ Provides named shortcut symlinks to frequently-accessed subfolders inside manage
 5. `alias reconcile` recreates missing or broken alias symlinks
 6. Aliases continue to resolve after an interface switch (TB → FB or FB → TB)
 7. Adding an alias for a non-existent share produces a clear error
+
+## References
+- `.planning/reqs-001.md` — JTBD 5, Core Design §3 (Managed Subfolder Aliases)
+
+## Notes
+- **Atomic symlink creation** `[observed from code]`: `reconcile_alias()` in `engine.rs` uses an atomic write-to-temp-then-rename pattern, consistent with stable path symlink management.

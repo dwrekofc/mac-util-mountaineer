@@ -6,15 +6,17 @@ Defines the configuration model (TOML) and runtime state persistence (JSON) that
 ## Requirements
 - Load configuration from `~/.mountaineer/config.toml`
 - Create default config with sensible defaults if file does not exist
-- Support `[global]` section with: `shares_root`, `check_interval_secs`, `auto_failback`, `auto_failback_stable_secs`, `connect_timeout_ms`, `lsof_recheck`
+- Support `[global]` section with: `shares_root` (default `~/Shares`), `check_interval_secs` (default 2), `auto_failback` (default false), `auto_failback_stable_secs` (default 30), `connect_timeout_ms` (default 800), `lsof_recheck`
 - Support `[[shares]]` array with per-share: `name`, `username`, `thunderbolt_host`, `fallback_host`, `share_name`
 - Support `[[aliases]]` array with per-alias: `name`, `path`, `share`, `target_subpath`
 - Expand `~/` to the user's home directory in all path fields
 - Persist runtime state to `~/.mountaineer/state.json`
 - Runtime state tracks per-share: `active_interface` (tb|fallback), `tb_reachable` (bool), `tb_reachable_since` (timestamp), `fb_reachable` (bool), `mount_alive` (bool), `tb_recovery_pending` (bool), `last_switch_at` (timestamp), `last_error` (optional string)
+- Runtime state also tracks `tb_healthy_since` (timestamp) per share — when TB was first confirmed both reachable AND mounted `[observed from code]`
 - Support config hot-reload: detect changes to `config.toml` and apply without restart
 - Save runtime state after every state-changing operation
 - Validate config on load: reject missing required fields, duplicate share names, invalid hosts
+- Use `shares_root` config field as the root for all stable symlink paths and alias paths — do not hardcode `~/Shares/` `[inferred]`
 
 ## Constraints
 - Config file is TOML; state file is JSON
@@ -31,3 +33,14 @@ Defines the configuration model (TOML) and runtime state persistence (JSON) that
 5. `lsof_recheck` field in `[global]` defaults to `true` and is toggleable
 6. Invalid config (missing share name, duplicate names) produces a clear error message
 7. `~/` is expanded to the absolute home directory path in all config path fields
+
+## References
+- `.planning/reqs-001.md` — Config Model (TOML), State Model
+
+## Notes
+- **Config path mismatch** `[observed from code]`: Code loads config from `~/.config/mountaineer/config.toml` and state from `~/.config/mountaineer/state.json`. Spec says `~/.mountaineer/`. Needs alignment (see also spec 01 Notes).
+- **`mount_root` field still in code** `[observed from code]`: `GlobalConfig` in `config.rs` still has a `mount_root` field (default `~/.mountaineer/mnts`) which is used by `backend_mount_path()` for dual-mount mode. The reqs state `mount_root` is removed. This field should be removed along with the dual-mount code path.
+- **`single_mount_mode` toggle** `[observed from code]`: `GlobalConfig` has `single_mount_mode: bool` (default true). The reqs and specs treat single-mount as the only architecture, not a toggle. This field should be removed.
+- **`auto_failback` default** `[observed from code]`: Code defaults `auto_failback` to `false`; reqs §Config show it as `true`. Needs alignment.
+- **`lsof_recheck` not in code** `[observed from code]`: The `GlobalConfig` struct does not currently include a `lsof_recheck` field. The engine re-checks lsof every cycle when `tb_recovery_pending` is true regardless of a toggle. Implementation needed to match spec.
+- **Config validation** `[observed from code]`: Code does not currently validate for duplicate share names or invalid hosts on load — it returns `Config::default()` if the file is missing and parses what it finds.

@@ -25,3 +25,11 @@ Provides single-command mount and unmount of all managed shares for quick desk a
 4. `unmount --all --force` unmounts all shares regardless of open files
 5. Per-share success/failure/busy results are reported to the user
 6. Runtime state is updated for each share after the operation
+
+## References
+- `.planning/reqs-001.md` — JTBD 6
+
+## Notes
+- **`mount --all` delegates to reconcile** `[observed from code]`: `cmd_mount` in `main.rs` calls `engine::reconcile_all`, making it functionally identical to `reconcile --all`. This matches the intent (mount via best interface) but means mount also triggers failover/recovery logic, not just mount.
+- **`--force` flag on unmount** `[observed from code]`: The `Unmount` CLI command struct only has an `all: bool` field — no `--force` flag is currently wired. The engine supports force unmount but the CLI cannot invoke it.
+- **Stable symlink removal on unmount** `[observed from code]`: `engine::unmount_all` removes stable symlinks after unmounting. The spec doesn't explicitly require or forbid this — it may surprise users who expect symlinks to persist across unmount/remount cycles. `[needs-clarification]`

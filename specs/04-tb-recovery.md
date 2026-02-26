@@ -6,6 +6,7 @@ Manages the transition back from Fallback to Thunderbolt when TB becomes availab
 ## Requirements
 - Detect TB availability via TCP 445 probe during each reconcile cycle
 - Track `tb_reachable` and `tb_reachable_since` timestamp in runtime state
+- Track `tb_healthy_since` separately — when TB is both reachable AND successfully mounted `[observed from code]`
 - Apply a stability window (`auto_failback_stable_secs`, default 30s) before considering TB as stably available — prevents flapping
 - When TB is stably available and share is on Fallback, check for open files via `lsof +D <mountpoint>`
 - **No open files + auto_failback enabled**: auto-switch (unmount Fallback, remount via TB) silently
@@ -35,3 +36,11 @@ Manages the transition back from Fallback to Thunderbolt when TB becomes availab
 7. `switch --to tb --force` succeeds even with open files
 8. Failed mount after unmount triggers rollback to Fallback
 9. `tb_recovery_pending` clears when recovery completes or TB drops again
+
+## References
+- `.planning/reqs-001.md` — JTBD 2 (THE Critical JTBD), Core Design §6 (Recovery Policy), §7 (Open-File Safety)
+- `.planning/decisions-001.md` — User-Controlled Recovery decision
+
+## Notes
+- **`--force` flag not implemented on CLI switch** `[observed from code]`: The `Switch` CLI command struct accepts `share` and `to` but does not include a `--force` flag. The engine's `switch_backend_single_mount` does check for open files and returns `BusyOpenFiles`, but the CLI has no way to bypass this currently.
+- **`lsof_recheck` toggle not implemented** `[observed from code]`: The engine always re-checks lsof each reconcile cycle when `tb_recovery_pending` is true. There is no config toggle to disable this behavior. See also spec 02 Notes.

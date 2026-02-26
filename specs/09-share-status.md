@@ -4,7 +4,7 @@
 Defines the per-share health and status data model that powers both CLI output and the menu bar UI. This is the common status representation consumed by all presentation layers.
 
 ## Requirements
-- Provide per-share status containing: share name, active interface (tb|fallback|none), mount state (mounted|unmounted|error), mount path, TB reachable (bool), FB reachable (bool), tb_recovery_pending (bool), last_error (optional string), last_switch_at (timestamp)
+- Provide per-share status containing: share name, active interface (tb|fallback|none), mount state (mounted|unmounted|error), mount path, TB reachable (bool), FB reachable (bool), tb_recovery_pending (bool), last_error (optional string), last_switch_at (timestamp), tb_reachable_since (timestamp), tb_healthy_since (timestamp) `[observed from code]`
 - `status --all` displays health for every managed share in human-readable format
 - `status --all --json` outputs the same data as valid JSON for machine parsing
 - Include the "TB Ready" indicator when `tb_recovery_pending` is true — this must be prominent in both human and JSON output
@@ -26,3 +26,10 @@ Defines the per-share health and status data model that powers both CLI output a
 4. `verify --all --json` runs health checks and outputs results as JSON
 5. Status output includes `lsof_recheck` setting
 6. The same status data structure is usable by the tray menu without transformation
+
+## References
+- `.planning/reqs-001.md` — JTBD 7, JTBD 8 (CLI status), State Model
+
+## Notes
+- **`ShareStatus` struct** `[observed from code]`: The `ShareStatus` struct in `engine.rs` includes per-backend `BackendStatus` (host, mount_point, reachable, mounted, alive, ready, last_error), `desired_backend`, and `stable_path` — richer than what the spec enumerates. The spec requirements should be considered a minimum.
+- **`lsof_recheck` in status** `[observed from code]`: Since `lsof_recheck` is not yet in the config struct, it cannot appear in status output. This is a build task, not a spec gap.

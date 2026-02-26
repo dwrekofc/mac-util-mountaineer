@@ -42,3 +42,13 @@ Provides a complete, scriptable command-line surface for all Mountaineer operati
 4. `monitor` runs continuously until interrupted (Ctrl-C)
 5. `config set lsof-recheck on|off` updates config and takes effect on next reconcile
 6. All commands work without the menu bar UI running
+
+## References
+- `.planning/reqs-001.md` — JTBD 8, Phase 1 CLI Commands
+
+## Notes
+- **Missing `--force` flags** `[observed from code]`: The `Switch` command struct has no `--force` field. The `Unmount` command struct has no `--force` field. Both are specified in the reqs and this spec but not yet wired in `cli.rs`.
+- **Missing `config set` command** `[observed from code]`: No `Config` variant exists in the `Command` enum. The `config set lsof-recheck on|off` command is not implemented.
+- **`mount --all` == `reconcile --all`** `[observed from code]`: `cmd_mount` delegates to `engine::reconcile_all`, making it functionally identical to reconcile. This is by design but worth noting — mount also performs failover/recovery logic.
+- **`status` requires `--all`** `[observed from code]`: The CLI rejects `status` without `--all`. Per-share `status --share <name>` is not supported — only `--all` mode. This differs from `verify` which supports both `--share` and `--all`.
+- **`mount-backends` command** `[observed from code]`: Code includes a `MountBackends` CLI command not in the spec. It calls `engine::mount_backends_for_shares` and is distinct from `mount --all`. This appears to be a legacy/debug command. `[needs-clarification: should this be removed or documented?]`

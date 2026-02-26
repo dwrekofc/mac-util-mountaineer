@@ -15,8 +15,8 @@ Enables Mountaineer to start automatically at login and run as a menu bar access
 
 ## Constraints
 - Plist lives at `~/Library/LaunchAgents/` (user-level, not system-level)
-- The installed binary path must be resolved at install time (not hardcoded)
-- Install/uninstall use `launchctl load`/`launchctl unload` (or `bootstrap`/`bootout` on newer macOS)
+- The installed binary path must be resolved at install time (not hardcoded) `[needs-clarification: code currently hardcodes ~/Applications/Mountaineer.app/Contents/MacOS/Mountaineer — see Notes]`
+- Install/uninstall use `launchctl bootstrap`/`launchctl bootout` with `gui/{uid}` domain `[observed from code]`
 
 ## Acceptance Criteria
 1. `mountaineer install` creates a valid plist at `~/Library/LaunchAgents/com.mountaineer.agent.plist`
@@ -24,3 +24,11 @@ Enables Mountaineer to start automatically at login and run as a menu bar access
 3. The running app has no Dock icon (menu bar accessory only)
 4. `mountaineer uninstall` removes the plist and stops the agent
 5. Running `uninstall` when no plist exists does not error
+
+## References
+- `.planning/reqs-001.md` — JTBD 10
+
+## Notes
+- **Hardcoded binary path** `[observed from code]`: `generate_plist()` in `launchd.rs` hardcodes the binary path to `~/Applications/Mountaineer.app/Contents/MacOS/Mountaineer`. The constraint says it should be resolved at install time. This limits installation to a specific app bundle location.
+- **`KeepAlive: false`** `[observed from code]`: The plist sets `KeepAlive = false`, meaning macOS will not restart the app if it crashes. `[needs-clarification: should KeepAlive be true for reliability?]`
+- **Modern launchctl API** `[observed from code]`: Code correctly uses `launchctl bootstrap gui/{uid}` and `launchctl bootout gui/{uid}` instead of the deprecated `load`/`unload` commands.

@@ -24,3 +24,13 @@ Provides one-click access to common tasks and settings toggles from the menu bar
 4. Lsof-recheck toggle changes the config value and is reflected in the menu immediately
 5. Neither toggle requires an app restart to take effect
 6. "Quit" cleanly stops the Mountaineer process
+
+## References
+- `.planning/reqs-001.md` — JTBD 17
+
+## Notes
+- **Partially implemented** `[observed from code]`: The tray menu currently includes:
+  - "Open Shares Folder" — calls `open {shares_root}` to open in Finder (working)
+  - "Quit Mountaineer" — signals `cx.quit()` (working)
+- **Missing from current tray** `[observed from code]`: "Open Logs" action, `auto_failback` toggle, `lsof_recheck` toggle, visual toggle state indicators. These are Phase 2 build tasks.
+- **Config atomic write** `[observed from code]`: `config::Config::save()` uses `fs::write` directly, not atomic temp-then-rename. The spec constraint says "Config writes must not corrupt the file (atomic write or equivalent)."

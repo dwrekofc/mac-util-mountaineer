@@ -22,3 +22,9 @@ Provides single-click mount-all and unmount-all actions in the menu bar for quic
 3. Busy shares are reported to the user (not silently skipped)
 4. Menu updates to reflect new mount state after operation completes
 5. Actions use the same engine functions as CLI `mount --all` and `unmount --all`
+
+## References
+- `.planning/reqs-001.md` — JTBD 15
+
+## Notes
+- **Not yet implemented** `[observed from code]`: The current tray menu does not include "Mount All" or "Unmount All" actions. The engine functions `reconcile_all` and `unmount_all` exist and are used by the CLI. This is a Phase 2 build task.

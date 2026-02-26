@@ -23,3 +23,9 @@ Enables adding and removing managed network shares directly from the menu bar ap
 4. "Remove Favorite" with cleanup unmounts and removes the symlink
 5. Confirmation is shown before removal
 6. Affected aliases are reported during removal
+
+## References
+- `.planning/reqs-001.md` — JTBD 13
+
+## Notes
+- **Not yet implemented** `[observed from code]`: The current tray menu (`tray.rs`) does not include "Add Favorite" or "Remove Favorite" actions. The engine functions `add_or_update_share` and `remove_share` exist and are used by the CLI, but the tray has no UI for invoking them. This is a Phase 2 build task.

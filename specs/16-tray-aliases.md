@@ -24,3 +24,9 @@ Enables browsing share folder trees and creating/removing subfolder aliases from
 4. Aliases can be removed from the UI
 5. Browse/create/remove actions all call engine functions (no separate code paths)
 6. Clear feedback is shown if the share is not mounted
+
+## References
+- `.planning/reqs-001.md` — JTBD 14
+
+## Notes
+- **Not yet implemented** `[observed from code]`: The current tray menu does not include alias management or folder browsing. The engine functions `add_alias`, `remove_alias`, `inspect_aliases`, and `list_folders` exist and are used by the CLI, but the tray has no UI for invoking them. This is a Phase 2 build task.

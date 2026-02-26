@@ -12,6 +12,7 @@ Provides permanent, predictable file paths that applications, scripts, and Finde
 - `~/Shares/` is openable in Finder as the central hub for all managed shares
 - Validate symlink health during reconciliation — recreate if missing or broken
 - Remove symlink only on explicit favorites removal with cleanup flag
+- Create and update symlinks atomically using a write-to-temp-then-rename pattern to avoid broken intermediate states `[observed from code]`
 
 ## Constraints
 - Symlinks point to `/Volumes/<SHARE>`, not directly to mount backend paths
@@ -24,3 +25,7 @@ Provides permanent, predictable file paths that applications, scripts, and Finde
 3. The symlink resolves correctly regardless of which interface (TB or Fallback) is active
 4. A missing or broken symlink is recreated during reconciliation
 5. Symlink is only removed when the share is removed from favorites with `--cleanup`
+
+## References
+- `.planning/reqs-001.md` — JTBD 3, Core Design §2 (Stable User Path)
+- `.planning/decisions-001.md` — Simplified Symlink decision
