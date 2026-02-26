@@ -11,6 +11,10 @@
 - Clippy: `cargo clippy --all-targets -- -D warnings`
 - Format check: `cargo fmt --all -- --check`
 
+## Git
+
+- Remote: always use SSH (`git@github.com:dwrekofc/...`), never HTTPS.
+
 ## Operational Notes
 
 ### Codebase Patterns
