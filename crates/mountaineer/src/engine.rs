@@ -25,7 +25,7 @@ pub struct ShareRuntimeState {
     pub tb_healthy_since: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
     /// TB became available while on Fallback (awaiting user confirmation to switch).
-    /// In single_mount_mode with auto_failback=false, the user must explicitly trigger the switch.
+    /// With auto_failback=false, the user must explicitly trigger the switch.
     #[serde(default)]
     pub tb_recovery_pending: bool,
 }
@@ -132,20 +132,6 @@ pub fn reconcile_all(config: &Config, state: &mut RuntimeState) -> Vec<ShareStat
     statuses
 }
 
-pub fn mount_backends_for_shares(
-    config: &Config,
-    state: &mut RuntimeState,
-    share_names: &[String],
-) -> Result<Vec<ShareStatus>> {
-    let now = Utc::now();
-    let shares = select_shares(config, share_names)?;
-    let statuses = shares
-        .iter()
-        .map(|share| reconcile_share(config, state, share, true, false, now))
-        .collect();
-    Ok(statuses)
-}
-
 pub fn reconcile_selected(
     config: &Config,
     state: &mut RuntimeState,
@@ -174,48 +160,7 @@ pub fn verify_selected(
     Ok(statuses)
 }
 
-pub fn switch_share(
-    config: &Config,
-    state: &mut RuntimeState,
-    share_name: &str,
-    to: Backend,
-) -> Result<ShareStatus> {
-    let share = config::find_share(config, share_name)
-        .ok_or_else(|| anyhow!("share '{}' is not configured", share_name))?;
-
-    let mut status = reconcile_share(config, state, share, true, false, Utc::now());
-    let target_probe = match to {
-        Backend::Tb => &status.tb,
-        Backend::Fallback => &status.fallback,
-    };
-
-    if !target_probe.ready {
-        return Err(anyhow!(
-            "cannot switch '{}' to {}: backend is not ready",
-            share.name,
-            to.short_label()
-        ));
-    }
-
-    let mount_target = config::backend_mount_path(config, &share.name, to);
-    set_symlink_atomically(
-        &mount_target,
-        &config::share_stable_path(config, &share.name),
-    )?;
-
-    let entry = state_entry_mut(state, &share.name);
-    entry.active_backend = Some(to);
-    entry.last_switch_at = Some(Utc::now());
-    entry.last_error = None;
-
-    status.active_backend = Some(to);
-    status.desired_backend = Some(to);
-    status.last_switch_at = entry.last_switch_at;
-    status.last_error = None;
-    Ok(status)
-}
-
-/// Result of a single-mount backend switch operation.
+/// Result of a backend switch operation.
 #[derive(Debug, Clone)]
 pub enum SwitchResult {
     /// Switch completed successfully.
@@ -233,7 +178,8 @@ pub enum SwitchResult {
     },
 }
 
-/// Switch backends in single-mount mode: unmount old → mount new → update symlink.
+/// Switch backends: unmount old → mount new → update symlink.
+/// Both backends mount at the same `/Volumes/<SHARE>` path under single-mount architecture.
 /// Attempts rollback if the new mount fails.
 pub fn switch_backend_single_mount(
     config: &Config,
@@ -243,22 +189,21 @@ pub fn switch_backend_single_mount(
     to: Backend,
     force: bool,
 ) -> SwitchResult {
-    let from_mount = config::backend_mount_path(config, &share.name, from);
-    let to_mount = config::backend_mount_path(config, &share.name, to);
+    let mount_point = config::volume_mount_path(&share.share_name);
     let to_host = backend_host(share, to);
     let stable_path = config::share_stable_path(config, &share.name);
 
     // Step 1: Check for open files (unless force)
-    if !force && mount::smb::is_mounted(&from_mount) && has_open_handles(&from_mount) {
+    if !force && mount::smb::is_mounted(&mount_point) && has_open_handles(&mount_point) {
         return SwitchResult::BusyOpenFiles;
     }
 
     // Step 2: Unmount old backend (if mounted)
-    if mount::smb::is_mounted(&from_mount) {
+    if mount::smb::is_mounted(&mount_point) {
         let unmount_result = if force {
-            mount::smb::unmount(&from_mount)
+            mount::smb::unmount(&mount_point)
         } else {
-            mount::smb::unmount_graceful(&from_mount)
+            mount::smb::unmount_graceful(&mount_point)
         };
 
         if let Err(e) = unmount_result {
@@ -268,18 +213,18 @@ pub fn switch_backend_single_mount(
             "{}: unmounted {} backend at {}",
             share.name,
             from.short_label(),
-            from_mount.display()
+            mount_point.display()
         );
     }
 
-    // Step 3: Mount new backend
+    // Step 3: Mount new backend at the same /Volumes/<SHARE> path
     let mount_result =
-        mount::smb::mount_share(to_host, &share.share_name, &share.username, &to_mount);
+        mount::smb::mount_share(to_host, &share.share_name, &share.username, &mount_point);
 
     match mount_result {
         Ok(()) => {
             // Verify mount is alive
-            if !mount::smb::is_mount_alive(&to_mount) {
+            if !mount::smb::is_mount_alive(&mount_point) {
                 log::warn!(
                     "{}: {} mounted but not responding, will retry",
                     share.name,
@@ -287,8 +232,8 @@ pub fn switch_backend_single_mount(
                 );
             }
 
-            // Step 4: Update symlink
-            if let Err(e) = set_symlink_atomically(&to_mount, &stable_path) {
+            // Step 4: Update symlink (~/Shares/<SHARE> -> /Volumes/<SHARE>)
+            if let Err(e) = set_symlink_atomically(&mount_point, &stable_path) {
                 log::error!("{}: mount succeeded but symlink failed: {}", share.name, e);
             }
 
@@ -314,14 +259,18 @@ pub fn switch_backend_single_mount(
                 "{}: failed to mount {} at {}: {}",
                 share.name,
                 to.short_label(),
-                to_mount.display(),
+                mount_point.display(),
                 error_msg
             );
 
             // Step 5: Rollback - try to remount old backend
             let from_host = backend_host(share, from);
-            let rollback_result =
-                mount::smb::mount_share(from_host, &share.share_name, &share.username, &from_mount);
+            let rollback_result = mount::smb::mount_share(
+                from_host,
+                &share.share_name,
+                &share.username,
+                &mount_point,
+            );
 
             let rolled_back = rollback_result.is_ok();
             if rolled_back {
@@ -330,8 +279,8 @@ pub fn switch_backend_single_mount(
                     share.name,
                     from.short_label()
                 );
-                // Restore symlink to old backend
-                let _ = set_symlink_atomically(&from_mount, &stable_path);
+                // Restore symlink (target unchanged since both use /Volumes/<SHARE>)
+                let _ = set_symlink_atomically(&mount_point, &stable_path);
             } else {
                 log::error!(
                     "{}: rollback to {} also failed!",
@@ -353,62 +302,45 @@ pub fn unmount_all(config: &Config, state: &mut RuntimeState) -> Vec<UnmountResu
 
     for share in &config.shares {
         let active_backend = current_active_backend(config, state, share);
+        let mount_point = config::volume_mount_path(&share.share_name);
+        let mounted = mount::smb::is_mounted(&mount_point);
+        let mut result = UnmountResult {
+            share: share.name.clone(),
+            backend: active_backend.unwrap_or(Backend::Tb),
+            mount_point: mount_point.display().to_string(),
+            attempted: mounted,
+            unmounted: false,
+            busy: false,
+            message: None,
+        };
 
-        for backend in [Backend::Tb, Backend::Fallback] {
-            let mount_point = config::backend_mount_path(config, &share.name, backend);
-            let mounted = mount::smb::is_mounted(&mount_point);
-            let mut result = UnmountResult {
-                share: share.name.clone(),
-                backend,
-                mount_point: mount_point.display().to_string(),
-                attempted: mounted,
-                unmounted: false,
-                busy: false,
-                message: None,
-            };
-
-            if !mounted {
-                results.push(result);
-                continue;
-            }
-
-            if has_open_handles(&mount_point) {
-                result.busy = true;
-                result.message = Some("deferred: open files detected".to_string());
-                results.push(result);
-                continue;
-            }
-
-            if active_backend == Some(backend) {
-                match mount::smb::unmount_graceful(&mount_point) {
-                    Ok(()) => {
-                        result.unmounted = true;
-                        result.message = Some("active backend unmounted gracefully".to_string());
-                    }
-                    Err(err) => {
-                        result.message =
-                            Some(format!("active backend not force-unmounted: {}", err));
-                    }
+        if !mounted {
+            // not mounted, nothing to do
+        } else if has_open_handles(&mount_point) {
+            result.busy = true;
+            result.message = Some("deferred: open files detected".to_string());
+        } else {
+            match mount::smb::unmount_graceful(&mount_point) {
+                Ok(()) => {
+                    result.unmounted = true;
+                    result.message = Some("unmounted gracefully".to_string());
                 }
-            } else {
-                match mount::smb::unmount(&mount_point) {
-                    Ok(()) => {
-                        result.unmounted = true;
-                    }
-                    Err(err) => {
-                        result.message = Some(err.to_string());
-                    }
+                Err(err) => {
+                    result.message = Some(format!("unmount failed: {}", err));
                 }
             }
-            results.push(result);
         }
 
         // Stable symlinks are preserved across unmount per spec 05/08.
         // They are only removed on explicit `favorites remove --cleanup`.
 
-        let entry = state_entry_mut(state, &share.name);
-        entry.active_backend = None;
-        entry.last_error = None;
+        if result.unmounted {
+            let entry = state_entry_mut(state, &share.name);
+            entry.active_backend = None;
+            entry.last_error = None;
+        }
+
+        results.push(result);
     }
 
     results
@@ -558,48 +490,45 @@ fn unmount_all_for_share(
     state: &mut RuntimeState,
     share_name: &str,
 ) -> Vec<UnmountResult> {
-    let mut results = Vec::new();
     let active_backend = config::find_share(config, share_name)
         .and_then(|share| current_active_backend(config, state, share));
 
-    for backend in [Backend::Tb, Backend::Fallback] {
-        let mount_point = config::backend_mount_path(config, share_name, backend);
-        let mounted = mount::smb::is_mounted(&mount_point);
-        let mut result = UnmountResult {
-            share: share_name.to_string(),
-            backend,
-            mount_point: mount_point.display().to_string(),
-            attempted: mounted,
-            unmounted: false,
-            busy: false,
-            message: None,
-        };
-        if mounted {
-            if has_open_handles(&mount_point) {
-                result.busy = true;
-                result.message = Some("deferred: open files detected".to_string());
-            } else if active_backend == Some(backend) {
-                match mount::smb::unmount_graceful(&mount_point) {
-                    Ok(()) => {
-                        result.unmounted = true;
-                        result.message = Some("active backend unmounted gracefully".to_string());
-                    }
-                    Err(err) => {
-                        result.message =
-                            Some(format!("active backend not force-unmounted: {}", err));
-                    }
+    // Find the share_name on the remote to determine the volume mount path.
+    // Use the share's `share_name` field if available, otherwise fall back to `share_name` param.
+    let remote_name = config::find_share(config, share_name)
+        .map(|s| s.share_name.as_str())
+        .unwrap_or(share_name);
+    let mount_point = config::volume_mount_path(remote_name);
+    let mounted = mount::smb::is_mounted(&mount_point);
+    let mut result = UnmountResult {
+        share: share_name.to_string(),
+        backend: active_backend.unwrap_or(Backend::Tb),
+        mount_point: mount_point.display().to_string(),
+        attempted: mounted,
+        unmounted: false,
+        busy: false,
+        message: None,
+    };
+
+    if mounted {
+        if has_open_handles(&mount_point) {
+            result.busy = true;
+            result.message = Some("deferred: open files detected".to_string());
+        } else {
+            match mount::smb::unmount_graceful(&mount_point) {
+                Ok(()) => {
+                    result.unmounted = true;
+                    result.message = Some("unmounted gracefully".to_string());
                 }
-            } else {
-                match mount::smb::unmount(&mount_point) {
-                    Ok(()) => result.unmounted = true,
-                    Err(err) => result.message = Some(err.to_string()),
+                Err(err) => {
+                    result.message = Some(format!("unmount failed: {}", err));
                 }
             }
         }
-        results.push(result);
     }
+
     state_entry_mut(state, share_name).active_backend = None;
-    results
+    vec![result]
 }
 
 pub fn share_statuses(config: &Config, state: &mut RuntimeState) -> Vec<ShareStatus> {
@@ -615,10 +544,9 @@ fn reconcile_share(
     now: DateTime<Utc>,
 ) -> ShareStatus {
     let timeout = Duration::from_millis(config.global.connect_timeout_ms);
-    let single_mount = config.global.single_mount_mode;
 
     let stable_path = config::share_stable_path(config, &share.name);
-    let detected_active = detect_active_backend(config, share, &stable_path);
+    let detected_active = detect_active_backend(state, &share.name);
     let remembered_active = state
         .shares
         .get(&share.name.to_ascii_lowercase())
@@ -626,24 +554,14 @@ fn reconcile_share(
     let active_hint = detected_active.or(remembered_active);
 
     // Probe both backends (always check reachability for status display)
-    // In single_mount_mode, only the active backend will attempt to mount
-    let tb = probe_backend(
-        config,
-        share,
-        Backend::Tb,
-        timeout,
-        attempt_mount,
-        active_hint,
-        single_mount,
-    );
+    // Only the active backend will attempt to mount
+    let tb = probe_backend(share, Backend::Tb, timeout, attempt_mount, active_hint);
     let fb = probe_backend(
-        config,
         share,
         Backend::Fallback,
         timeout,
         attempt_mount,
         active_hint,
-        single_mount,
     );
 
     // Update TB reachability/health tracking (scoped borrow)
@@ -676,33 +594,19 @@ fn reconcile_share(
         (active_backend, tb_stability_since)
     };
 
-    // In single_mount_mode, we handle failover differently
-    let desired_backend = if single_mount {
-        choose_desired_backend_single_mount(
-            active_backend,
-            tb.status.reachable,
-            fb.status.reachable,
-            config.global.auto_failback,
-            tb_stability_since,
-            config.global.auto_failback_stable_secs,
-            now,
-        )
-    } else {
-        choose_desired_backend(
-            active_backend,
-            tb.status.ready,
-            fb.status.ready,
-            config.global.auto_failback,
-            tb_stability_since,
-            config.global.auto_failback_stable_secs,
-            now,
-        )
-    };
+    let desired_backend = choose_desired_backend(
+        active_backend,
+        tb.status.reachable,
+        fb.status.reachable,
+        config.global.auto_failback,
+        tb_stability_since,
+        config.global.auto_failback_stable_secs,
+        now,
+    );
 
     let mut last_error = None;
 
-    if single_mount && auto_switch {
-        // Single-mount mode switching logic
+    if auto_switch {
         if let Some(active) = active_backend {
             let active_ready = backend_ready(active, &tb.status, &fb.status);
 
@@ -821,9 +725,9 @@ fn reconcile_share(
                 state_entry_mut(state, &share.name).tb_recovery_pending = false;
             }
         } else if let Some(desired) = desired_backend {
-            // No active backend - do initial mount
+            // No active backend - do initial mount at /Volumes/<SHARE>
             let host = backend_host(share, desired);
-            let mount_path = config::backend_mount_path(config, &share.name, desired);
+            let mount_path = config::volume_mount_path(&share.share_name);
             log::info!(
                 "{}: initial mount to {} at {}",
                 share.name,
@@ -846,46 +750,6 @@ fn reconcile_share(
                     state_entry_mut(state, &share.name).last_error = Some(msg);
                 }
             }
-        }
-    } else if !single_mount && auto_switch {
-        // Original dual-mount mode logic (unchanged)
-        if let Some(desired) = desired_backend {
-            if backend_ready(desired, &tb.status, &fb.status) {
-                let mount_target = config::backend_mount_path(config, &share.name, desired);
-                match set_symlink_atomically(&mount_target, &stable_path) {
-                    Ok(()) => {
-                        let entry = state_entry_mut(state, &share.name);
-                        if active_backend != Some(desired) {
-                            entry.last_switch_at = Some(now);
-                            log::info!(
-                                "{}: switched active backend {} -> {}",
-                                share.name,
-                                active_backend.map(|b| b.short_label()).unwrap_or("none"),
-                                desired.short_label()
-                            );
-                        }
-                        entry.active_backend = Some(desired);
-                        entry.last_error = None;
-                    }
-                    Err(err) => {
-                        let msg = format!("failed switching stable path: {}", err);
-                        last_error = Some(msg.clone());
-                        state_entry_mut(state, &share.name).last_error = Some(msg);
-                    }
-                }
-            } else {
-                if active_backend != Some(desired) {
-                    log::info!(
-                        "{}: holding active={} desired={} (desired backend not ready)",
-                        share.name,
-                        active_backend.map(|b| b.short_label()).unwrap_or("none"),
-                        desired.short_label()
-                    );
-                }
-                state_entry_mut(state, &share.name).active_backend = active_backend;
-            }
-        } else {
-            state_entry_mut(state, &share.name).active_backend = active_backend;
         }
     } else {
         state_entry_mut(state, &share.name).active_backend = active_backend;
@@ -914,59 +778,8 @@ fn reconcile_share(
     }
 }
 
+/// Choose desired backend based on reachability (since only the active backend is mounted).
 fn choose_desired_backend(
-    active: Option<Backend>,
-    tb_ready: bool,
-    fb_ready: bool,
-    auto_failback: bool,
-    tb_stability_since: Option<DateTime<Utc>>,
-    failback_stable_secs: u64,
-    now: DateTime<Utc>,
-) -> Option<Backend> {
-    match active {
-        Some(Backend::Tb) => {
-            if tb_ready {
-                Some(Backend::Tb)
-            } else {
-                // Prefer fallback intent even before fallback is fully ready, so
-                // status output remains consistent during disconnect transitions.
-                Some(Backend::Fallback)
-            }
-        }
-        Some(Backend::Fallback) => {
-            if !fb_ready {
-                if tb_ready {
-                    return Some(Backend::Tb);
-                }
-                return Some(Backend::Fallback);
-            }
-
-            if tb_ready
-                && auto_failback
-                && let Some(since) = tb_stability_since
-            {
-                let stable_for = (now - since).num_seconds().max(0) as u64;
-                if stable_for >= failback_stable_secs {
-                    return Some(Backend::Tb);
-                }
-            }
-            Some(Backend::Fallback)
-        }
-        None => {
-            if tb_ready {
-                Some(Backend::Tb)
-            } else if fb_ready {
-                Some(Backend::Fallback)
-            } else {
-                None
-            }
-        }
-    }
-}
-
-/// Choose desired backend in single-mount mode.
-/// Uses reachability instead of ready (since only active backend is mounted).
-fn choose_desired_backend_single_mount(
     active: Option<Backend>,
     tb_reachable: bool,
     fb_reachable: bool,
@@ -1019,16 +832,14 @@ fn choose_desired_backend_single_mount(
 }
 
 fn probe_backend(
-    config: &Config,
     share: &ShareConfig,
     backend: Backend,
     timeout: Duration,
     attempt_mount: bool,
     active_backend: Option<Backend>,
-    single_mount_mode: bool,
 ) -> BackendProbe {
     let host = backend_host(share, backend).to_string();
-    let mount_path = config::backend_mount_path(config, &share.name, backend);
+    let mount_path = config::volume_mount_path(&share.share_name);
 
     let mut last_error = None;
     let reachable = discovery::is_smb_reachable_with_timeout(&host, timeout);
@@ -1070,12 +881,9 @@ fn probe_backend(
         }
     }
 
-    // In single_mount_mode, only mount if this is the active backend (or no backend is active yet)
-    let should_mount = if single_mount_mode {
-        attempt_mount && (active_backend.is_none() || active_backend == Some(backend))
-    } else {
-        attempt_mount
-    };
+    // Only mount if this is the active backend (or no backend is active yet)
+    let should_mount =
+        attempt_mount && (active_backend.is_none() || active_backend == Some(backend));
 
     if should_mount && reachable && !mounted {
         log::info!(
@@ -1192,36 +1000,26 @@ fn state_entry_mut<'a>(state: &'a mut RuntimeState, share_name: &str) -> &'a mut
 }
 
 fn current_active_backend(
-    config: &Config,
+    _config: &Config,
     state: &RuntimeState,
     share: &ShareConfig,
 ) -> Option<Backend> {
-    let stable_path = config::share_stable_path(config, &share.name);
-    detect_active_backend(config, share, &stable_path).or_else(|| {
-        state
-            .shares
-            .get(&share.name.to_ascii_lowercase())
-            .and_then(|entry| entry.active_backend)
-    })
+    // Under single-mount architecture, both backends mount at /Volumes/<SHARE>.
+    // The symlink target is always the same path, so we rely on RuntimeState.
+    state
+        .shares
+        .get(&share.name.to_ascii_lowercase())
+        .and_then(|entry| entry.active_backend)
 }
 
-fn detect_active_backend(
-    config: &Config,
-    share: &ShareConfig,
-    stable_path: &Path,
-) -> Option<Backend> {
-    let link_target = resolve_symlink_target(stable_path)?;
-
-    let tb_target = config::backend_mount_path(config, &share.name, Backend::Tb);
-    let fb_target = config::backend_mount_path(config, &share.name, Backend::Fallback);
-
-    if path_eq(&link_target, &tb_target) {
-        Some(Backend::Tb)
-    } else if path_eq(&link_target, &fb_target) {
-        Some(Backend::Fallback)
-    } else {
-        None
-    }
+/// Detect active backend from persisted state.
+/// Under single-mount architecture, both backends mount at the same /Volumes/<SHARE> path,
+/// so symlink inspection cannot distinguish them. We rely on RuntimeState exclusively.
+fn detect_active_backend(state: &RuntimeState, share_name: &str) -> Option<Backend> {
+    state
+        .shares
+        .get(&share_name.to_ascii_lowercase())
+        .and_then(|entry| entry.active_backend)
 }
 
 fn inspect_alias(
@@ -1357,14 +1155,14 @@ mod tests {
     use chrono::Duration as ChronoDuration;
 
     #[test]
-    fn desired_backend_prefers_fallback_intent_when_tb_drops() {
+    fn desired_backend_prefers_fallback_when_tb_drops() {
         let now = Utc::now();
         let desired = choose_desired_backend(Some(Backend::Tb), false, false, true, None, 20, now);
         assert_eq!(desired, Some(Backend::Fallback));
     }
 
     #[test]
-    fn desired_backend_stays_fallback_intent_when_both_down() {
+    fn desired_backend_stays_fallback_when_both_down() {
         let now = Utc::now();
         let desired =
             choose_desired_backend(Some(Backend::Fallback), false, false, true, None, 20, now);
@@ -1374,13 +1172,13 @@ mod tests {
     #[test]
     fn desired_backend_failbacks_after_stability_window() {
         let now = Utc::now();
-        let healthy_since = now - ChronoDuration::seconds(31);
+        let reachable_since = now - ChronoDuration::seconds(31);
         let desired = choose_desired_backend(
             Some(Backend::Fallback),
             true,
             true,
             true,
-            Some(healthy_since),
+            Some(reachable_since),
             30,
             now,
         );
@@ -1401,6 +1199,27 @@ mod tests {
             now,
         );
         assert_eq!(desired, Some(Backend::Tb));
+    }
+
+    #[test]
+    fn desired_backend_prefers_tb_when_none_active() {
+        let now = Utc::now();
+        let desired = choose_desired_backend(None, true, true, false, None, 30, now);
+        assert_eq!(desired, Some(Backend::Tb));
+    }
+
+    #[test]
+    fn desired_backend_falls_back_to_fb_when_tb_unreachable() {
+        let now = Utc::now();
+        let desired = choose_desired_backend(None, false, true, false, None, 30, now);
+        assert_eq!(desired, Some(Backend::Fallback));
+    }
+
+    #[test]
+    fn desired_backend_none_when_both_unreachable() {
+        let now = Utc::now();
+        let desired = choose_desired_backend(None, false, false, false, None, 30, now);
+        assert_eq!(desired, None);
     }
 
     #[test]

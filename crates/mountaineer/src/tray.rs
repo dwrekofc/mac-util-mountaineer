@@ -168,34 +168,13 @@ fn handle_switch(
         Some(b) => b,
         None => {
             log::warn!("{}: no current backend, will do initial mount", share_name);
-            // Just mount the desired backend directly
-            let host = match to {
-                Backend::Tb => &share.thunderbolt_host,
-                Backend::Fallback => &share.fallback_host,
-            };
-            let mount_path = config::backend_mount_path(&cfg, &share.name, to);
-            match crate::mount::smb::mount_share(
-                host,
-                &share.share_name,
-                &share.username,
-                &mount_path,
-            ) {
-                Ok(()) => {
-                    let stable_path = config::share_stable_path(&cfg, &share.name);
-                    let _ = set_symlink_atomically(&mount_path, &stable_path);
-                    let entry = guard
-                        .runtime_state
-                        .shares
-                        .entry(share_name.to_ascii_lowercase())
-                        .or_default();
-                    entry.active_backend = Some(to);
-                    entry.tb_recovery_pending = false;
-                    let _ = engine::save_runtime_state(&guard.runtime_state);
-                    log::info!("{}: mounted to {}", share_name, to.short_label());
-                }
-                Err(e) => {
-                    log::error!("{}: mount failed: {}", share_name, e);
-                }
+            // No active backend — trigger a reconcile to do initial mount through the engine
+            guard.statuses = engine::reconcile_all(&cfg, &mut guard.runtime_state);
+            let _ = engine::save_runtime_state(&guard.runtime_state);
+            drop(guard);
+            let new_menu = build_dynamic_menu(state);
+            if let Ok(tray) = tray.lock() {
+                tray.set_menu(Some(Box::new(new_menu)));
             }
             return;
         }
@@ -387,44 +366,6 @@ fn open_shares_folder() -> anyhow::Result<()> {
     std::process::Command::new("open")
         .arg(shares_root)
         .spawn()?;
-    Ok(())
-}
-
-fn set_symlink_atomically(
-    target: &std::path::Path,
-    link_path: &std::path::Path,
-) -> anyhow::Result<()> {
-    use std::fs;
-
-    if let Some(parent) = link_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    if link_path.exists() {
-        let meta = fs::symlink_metadata(link_path)?;
-        if !meta.file_type().is_symlink() {
-            return Err(anyhow::anyhow!(
-                "{} exists and is not a symlink",
-                link_path.display()
-            ));
-        }
-        fs::remove_file(link_path)?;
-    }
-
-    let file_name = link_path
-        .file_name()
-        .ok_or_else(|| anyhow::anyhow!("invalid symlink path"))?
-        .to_string_lossy();
-    let tmp_name = format!(".{}.tmp-{}", file_name, std::process::id());
-    let tmp_path = link_path.parent().unwrap().join(tmp_name);
-
-    if tmp_path.exists() {
-        let _ = fs::remove_file(&tmp_path);
-    }
-
-    std::os::unix::fs::symlink(target, &tmp_path)?;
-    fs::rename(&tmp_path, link_path)?;
-
     Ok(())
 }
 

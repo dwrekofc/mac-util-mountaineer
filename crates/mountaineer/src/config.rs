@@ -12,13 +12,6 @@ pub enum Backend {
 }
 
 impl Backend {
-    pub fn mount_suffix(self) -> &'static str {
-        match self {
-            Backend::Tb => "tb",
-            Backend::Fallback => "fb",
-        }
-    }
-
     pub fn short_label(self) -> &'static str {
         match self {
             Backend::Tb => "tb",
@@ -31,8 +24,6 @@ impl Backend {
 pub struct GlobalConfig {
     #[serde(default = "default_shares_root")]
     pub shares_root: String,
-    #[serde(default = "default_mount_root")]
-    pub mount_root: String,
     #[serde(default = "default_check_interval_secs")]
     pub check_interval_secs: u64,
     #[serde(default = "default_auto_failback")]
@@ -41,23 +32,16 @@ pub struct GlobalConfig {
     pub auto_failback_stable_secs: u64,
     #[serde(default = "default_connect_timeout_ms")]
     pub connect_timeout_ms: u64,
-    /// Single-mount mode: only one backend mounted at a time (default: true).
-    /// When enabled, switching backends unmounts the old one before mounting the new one.
-    /// This prevents macOS from creating deduplicated volume names like /Volumes/CORE-1.
-    #[serde(default = "default_single_mount_mode")]
-    pub single_mount_mode: bool,
 }
 
 impl Default for GlobalConfig {
     fn default() -> Self {
         Self {
             shares_root: default_shares_root(),
-            mount_root: default_mount_root(),
             check_interval_secs: default_check_interval_secs(),
             auto_failback: default_auto_failback(),
             auto_failback_stable_secs: default_auto_failback_stable_secs(),
             connect_timeout_ms: default_connect_timeout_ms(),
-            single_mount_mode: default_single_mount_mode(),
         }
     }
 }
@@ -94,10 +78,6 @@ fn default_shares_root() -> String {
     "~/Shares".to_string()
 }
 
-fn default_mount_root() -> String {
-    "~/.mountaineer/mnts".to_string()
-}
-
 fn default_check_interval_secs() -> u64 {
     2
 }
@@ -112,10 +92,6 @@ fn default_auto_failback_stable_secs() -> u64 {
 
 fn default_connect_timeout_ms() -> u64 {
     800
-}
-
-fn default_single_mount_mode() -> bool {
-    true
 }
 
 pub fn config_path() -> PathBuf {
@@ -174,20 +150,15 @@ pub fn shares_root_path(config: &Config) -> PathBuf {
     expand_path(&config.global.shares_root)
 }
 
-pub fn mount_root_path(config: &Config) -> PathBuf {
-    expand_path(&config.global.mount_root)
-}
-
 pub fn share_stable_path(config: &Config, share_name: &str) -> PathBuf {
     shares_root_path(config).join(share_name)
 }
 
-pub fn backend_mount_path(config: &Config, share_name: &str, backend: Backend) -> PathBuf {
-    mount_root_path(config).join(format!(
-        "{}_{}",
-        sanitize_share_name(share_name),
-        backend.mount_suffix()
-    ))
+/// Returns the macOS-managed volume mount point at `/Volumes/<share_name>`.
+/// Under single-mount architecture, both TB and Fallback mount to the same path.
+/// macOS manages the `/Volumes/` directory — Mountaineer must NOT create it.
+pub fn volume_mount_path(share_name: &str) -> PathBuf {
+    PathBuf::from("/Volumes").join(share_name)
 }
 
 pub fn default_alias_path(config: &Config, alias_name: &str) -> PathBuf {
@@ -221,29 +192,14 @@ pub fn normalize_alias_path(path: &Path) -> String {
     path.to_string_lossy().to_string()
 }
 
-fn sanitize_share_name(name: &str) -> String {
-    let mut out = String::with_capacity(name.len());
-    for ch in name.chars() {
-        if ch.is_ascii_alphanumeric() {
-            out.push(ch.to_ascii_lowercase());
-        } else {
-            out.push('_');
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn backend_paths_use_suffixes() {
-        let cfg = Config::default();
-        let tb = backend_mount_path(&cfg, "CORE", Backend::Tb);
-        let fb = backend_mount_path(&cfg, "CORE", Backend::Fallback);
-        assert!(tb.to_string_lossy().contains("core_tb"));
-        assert!(fb.to_string_lossy().contains("core_fb"));
+    fn volume_mount_path_uses_volumes_dir() {
+        let path = volume_mount_path("CORE");
+        assert_eq!(path, PathBuf::from("/Volumes/CORE"));
     }
 
     #[test]

@@ -39,8 +39,6 @@ pub enum Command {
         #[arg(long)]
         to: Backend,
     },
-    /// Ensure backend mounts exist
-    MountBackends(MultiShareTarget),
     /// Health and mountpoint checks only
     Verify {
         #[command(flatten)]

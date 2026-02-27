@@ -3,7 +3,7 @@
 # Mountaineer V2 — Implementation Plan
 
 > Last updated: 2026-02-27
-> Status: Active — P0.0, P0.1, P0.4, P0.5, P0.8 complete.
+> Status: Active — P0.0, P0.1, P0.2, P0.3, P0.4, P0.5, P0.6, P0.7, P0.8 complete.
 
 Items are sorted by priority. Each item references the authoritative spec(s).
 Items marked **[DONE]** are confirmed complete against their spec.
@@ -26,53 +26,11 @@ These must be resolved first. Every other item depends on correct foundations.
 
 ### P0.2 Remove dual-mount code and `single_mount_mode` toggle
 - **Specs:** 01-design-principles, 02-config-and-state
-- **Status:** [PARTIAL] — dual-mount is the default code path; single-mount is opt-in via toggle
-- **Files:** `crates/mountaineer/src/config.rs`, `crates/mountaineer/src/engine.rs`, `crates/mountaineer/src/cli.rs`, `crates/mountaineer/src/main.rs`
-- **Evidence:**
-  - `single_mount_mode` field exists in `GlobalConfig` (config.rs:48), defaults to `true`
-  - `mount_root` field exists in `GlobalConfig` (config.rs:35, default `~/.mountaineer/mnts/`)
-  - `backend_mount_path()` helper (config.rs:185) generates `<mount_root>/<share>_tb`/`<share>_fb` paths
-  - `MountBackends` CLI command variant (cli.rs:43) and handler `cmd_mount_backends` (main.rs:184) exist
-  - Dual-mount branch in `reconcile_share` at engine.rs:852-893 — updates symlink without unmounting
-  - `switch_share()` (engine.rs:177) — dual-mount switch (redirects symlink only, no unmount)
-  - `choose_desired_backend()` (engine.rs:919) — dual-mount backend selection (uses `ready` not `reachable`)
-  - `mount_backends_for_shares()` (engine.rs:135) — mounts both backends simultaneously
-  - `unmount_all()` iterates both `Backend::Tb` and `Backend::Fallback` per share (engine.rs:367)
-  - `unmount_all_for_share()` (engine.rs:558) also iterates both backends
-  - `sanitize_share_name()` (config.rs:224) — only used by `backend_mount_path`
-  - `backend_paths_use_suffixes` test (config.rs:241) — tests dual-mount path helper
-- **Work:**
-  - Remove `single_mount_mode` field from `GlobalConfig` and its default fn `default_single_mount_mode()`
-  - Remove `mount_root` field from `GlobalConfig` and `default_mount_root()`
-  - Remove `mount_root_path()`, `backend_mount_path()`, `sanitize_share_name()` helpers from config.rs
-  - Remove `MountBackends` CLI command variant and its handler `cmd_mount_backends`
-  - Remove dual-mount branch from `reconcile_share` (lines 852-893; keep only single-mount logic at lines 706-851)
-  - Remove `switch_share()` (engine.rs:177; dual-mount version); keep `switch_backend_single_mount()`
-  - Remove `choose_desired_backend()` (engine.rs:919; dual-mount); keep `choose_desired_backend_single_mount()`
-  - Remove `mount_backends_for_shares()` (engine.rs:135)
-  - Simplify `unmount_all()` and `unmount_all_for_share()` — unmount only the active backend, not both
-  - Update all call sites to remove `single_mount_mode` parameter threading
-  - Remove `backend_paths_use_suffixes` test
-- **Impact:** Massive simplification. Engine drops ~200 lines of branching.
+- **Status:** [DONE] — Removed `single_mount_mode`, `mount_root`, `backend_mount_path()`, `sanitize_share_name()`, `mount_suffix()`, `default_mount_root()`, `default_single_mount_mode()` from config.rs. Removed `switch_share()` (dual-mount switch), `choose_desired_backend()` (dual-mount version), `mount_backends_for_shares()` from engine.rs. Removed dual-mount branch from `reconcile_share` (lines 850-893). Removed `single_mount_mode` parameter from `probe_backend`. Simplified `unmount_all` and `unmount_all_for_share` to unmount only the single active mount. Removed `MountBackends` CLI command. Removed `backend_paths_use_suffixes` test. Added 3 new tests for `choose_desired_backend`. Engine dropped ~200 lines of dual-mount branching.
 
 ### P0.3 Fix volume paths — mount at `/Volumes/<SHARE>`, not backend-specific dirs
 - **Specs:** 01-design-principles, 05-stable-paths
-- **Status:** [PARTIAL] — mounts go to `~/.mountaineer/mnts/<share>_tb` (dual-mount artifact)
-- **Files:** `crates/mountaineer/src/config.rs`, `crates/mountaineer/src/engine.rs`, `crates/mountaineer/src/tray.rs`, `crates/mountaineer/src/mount/smb.rs`
-- **Evidence:**
-  - `reconcile_share` at engine.rs:828 uses `config::backend_mount_path(config, &share.name, desired)` for initial mounts
-  - `switch_backend_single_mount` at engine.rs:248,264 uses `backend_mount_path` for both `from` and `to` paths
-  - `detect_active_backend` at engine.rs:1208-1225 compares stable symlink target against `backend_mount_path` for TB and FB — after this fix it will always return `None` since symlinks point to `/Volumes/<SHARE>`
-  - `mount::smb::mount_share` (smb.rs:59) has a 3-phase strategy: (1) adopt existing Finder-mounted share, (2) try osascript Finder mount, (3) fallback to `mount_smbfs` — Finder mounts go to `/Volumes/<SHARE>` naturally
-- **Work:**
-  - After P0.2 removes `backend_mount_path`, replace all mount path computation with `/Volumes/<share_name>`
-  - Leverage `mount::smb::find_existing_mount_for_share` / Finder's natural `/Volumes/` path assignment
-  - `set_symlink_atomically` in engine must point `~/Shares/<SHARE>` -> `/Volumes/<SHARE>` (currently points to backend dir)
-  - Fix tray.rs line 184: `set_symlink_atomically` also points to `backend_mount_path`
-  - **Update `detect_active_backend`**: since symlink always points to `/Volumes/<SHARE>` (same for both backends), this function can no longer distinguish TB from Fallback. Must rely solely on `RuntimeState.active_backend` field instead. Simplify or remove `detect_active_backend`.
-  - Stable symlink no longer needs re-pointing on failover (volume identity is stable)
-  - Mountaineer must NOT create mount point directories under `/Volumes/` — macOS manages this
-- **Depends on:** P0.2
+- **Status:** [DONE] — All mount paths now use `config::volume_mount_path(&share.share_name)` which returns `/Volumes/<SHARE>`. Removed `backend_mount_path` entirely. `detect_active_backend` now relies solely on `RuntimeState.active_backend` (since symlink target is identical for both backends under /Volumes). Stable symlinks point to `/Volumes/<SHARE>`. Mountaineer does NOT create mount point directories under `/Volumes/` — macOS manages this.
 
 ### P0.4 Fix config path from `~/Library/Application Support/` to `~/.mountaineer/`
 - **Specs:** 01-design-principles, 02-config-and-state
@@ -84,29 +42,11 @@ These must be resolved first. Every other item depends on correct foundations.
 
 ### P0.6 Fix `cmd_switch` to call `switch_backend_single_mount` instead of `switch_share`
 - **Specs:** 10-cli-interface, 04-tb-recovery
-- **Status:** [PARTIAL] — `main.rs:177` calls `engine::switch_share` (dual-mount path)
-- **Files:** `crates/mountaineer/src/main.rs`
-- **Evidence:**
-  - `cmd_switch` at main.rs:177 calls `engine::switch_share(config, state, share_name, to_backend)`
-  - `switch_share` (engine.rs:177) is the dual-mount path — only redirects symlink, no unmount/remount
-  - Should use `switch_backend_single_mount` which properly unmounts old backend then mounts new
-- **Work:**
-  - Change `cmd_switch` to call `engine::switch_backend_single_mount`
-  - Need to determine `from` backend from runtime state
-  - Wire `--force` flag (see P1.1)
-- **Depends on:** P0.2 (after `switch_share` is removed)
+- **Status:** [DONE] — `cmd_switch` in main.rs now reads `from` backend from RuntimeState, calls `engine::switch_backend_single_mount`, and handles all `SwitchResult` variants with proper error messages.
 
 ### P0.7 Fix tray mount-from-none to go through engine, not bypass it
 - **Specs:** 01-design-principles ("All UI actions call the same engine functions as CLI")
-- **Status:** [PARTIAL] — tray bypasses engine for initial mounts
-- **Files:** `crates/mountaineer/src/tray.rs` (lines 166-200)
-- **Evidence:**
-  - When `active_backend` is `None` (tray.rs:166), tray directly calls `mount::smb::mount_share` at line 176 and local `set_symlink_atomically` at line 184
-  - This bypasses the engine entirely — duplicates mount logic, skips reconciliation, and violates the spec principle that all UI actions call the same engine functions as CLI
-  - Uses `config::backend_mount_path` for symlink target (wrong path, see P0.3)
-- **Work:**
-  - Replace the direct mount block (lines 166-200) with a call to `engine::reconcile_selected` or a new `engine::mount_share` function
-  - Ensure tray never directly calls `mount::smb::*` — always goes through engine layer
+- **Status:** [DONE] — Replaced the direct `mount::smb::mount_share` block in tray.rs `handle_switch` with `engine::reconcile_all()` call. Tray no longer bypasses the engine for initial mounts. Also removed duplicate `set_symlink_atomically` from tray.rs (P3.4 partially addressed).
 
 ### P0.8 Remove stale `watcher.rs`
 - **Specs:** 01-design-principles (V1 pruning)
@@ -378,12 +318,9 @@ These must be resolved first. Every other item depends on correct foundations.
   - Keep: `is_smb_reachable_with_timeout` (actively used), `check_share_available` (candidate for probe enhancement)
 
 ### P3.4 Deduplicate `set_symlink_atomically`
-- **Files:** `crates/mountaineer/src/engine.rs` (line 1266), `crates/mountaineer/src/tray.rs` (lines 392-428)
-- **Evidence:** Two nearly identical implementations exist. Both use the same algorithm: create parent dirs, validate link_path is not a non-symlink file, remove existing symlink, create temp symlink `.{filename}.tmp-{pid}`, atomic rename. Engine version uses `with_context` for richer errors; tray version uses bare `?`.
-- **Work:**
-  - Make engine version `pub(crate)` (or `pub`)
-  - Remove duplicate from `tray.rs`; import from `engine`
-  - After P0.7 (tray goes through engine), the tray copy may become naturally unreachable
+- **Files:** `crates/mountaineer/src/engine.rs` (line 1266)
+- **Evidence:** The tray.rs duplicate has been removed. Only the engine.rs version remains. However, it is still private (`fn`), not `pub(crate)`.
+- **Status:** [PARTIAL] — Duplicate removed from tray.rs. Engine version remains private; make `pub(crate)` if other modules need it.
 
 ### P3.5 Consolidate `share_statuses` and `verify_all`
 - **Files:** `crates/mountaineer/src/engine.rs` (lines 607-609, 115)
@@ -563,9 +500,9 @@ These are non-obvious environment facts discovered during implementation. They a
 
 ```
 Phase 1: Foundation (P0.0 -> P0.8)
-  [DONE] Fix workspace manifest -> [DONE] Wire mod network -> Remove dual-mount ->
-  Fix volume paths + detect_active_backend -> [DONE] Fix config path ->
-  [DONE] Fix unmount symlink preservation -> Fix cmd_switch -> Fix tray engine bypass ->
+  [DONE] Fix workspace manifest -> [DONE] Wire mod network -> [DONE] Remove dual-mount ->
+  [DONE] Fix volume paths + detect_active_backend -> [DONE] Fix config path ->
+  [DONE] Fix unmount symlink preservation -> [DONE] Fix cmd_switch -> [DONE] Fix tray engine bypass ->
   [DONE] Remove watcher.rs
 
 Phase 2: Spec Compliance (P1.1 -> P1.15)
@@ -599,6 +536,15 @@ Phase 8: Test Coverage (P7.1 -> P7.5)
 ---
 
 ## Change Log
+
+### 2026-02-27 (v6 — P0 complete)
+- **P0.2 [DONE]:** Removed all dual-mount code. Deleted `single_mount_mode`, `mount_root`, `backend_mount_path`, `sanitize_share_name`, `mount_suffix`, `MountBackends` CLI command, `switch_share()` (dual-mount switch), `choose_desired_backend()` (dual-mount), `mount_backends_for_shares()`. Removed dual-mount branch from `reconcile_share`. Simplified `unmount_all`/`unmount_all_for_share`. Engine dropped ~200 lines.
+- **P0.3 [DONE]:** All mount paths now use `/Volumes/<SHARE>` via `config::volume_mount_path()`. `detect_active_backend` relies solely on `RuntimeState.active_backend`. Stable symlinks point to `/Volumes/<SHARE>`.
+- **P0.6 [DONE]:** `cmd_switch` now calls `switch_backend_single_mount` with `from` determined from RuntimeState. Handles all `SwitchResult` variants.
+- **P0.7 [DONE]:** Tray `handle_switch` no longer bypasses engine for initial mounts — uses `engine::reconcile_all()`. Removed duplicate `set_symlink_atomically` from tray.rs.
+- **P3.4 updated:** Duplicate `set_symlink_atomically` removed from tray.rs. Only engine.rs copy remains.
+- **25 tests pass** (was 22 before P0.1, now 25 including 3 new `choose_desired_backend` tests).
+- **All P0 items now complete.** Phase 1 (Architectural Foundation) is finished.
 
 ### 2026-02-27 (v5 — P0 partial completion)
 - **P0.0 [DONE]:** Workspace manifest fixed. Root `Cargo.toml` converted to workspace; all 13 deps defined in `[workspace.dependencies]`; `gpui_platform` added with `runtime_shaders` feature; stale root `main.rs` removed; `Cargo.lock` updated.

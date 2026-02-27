@@ -55,14 +55,6 @@ fn run_cli(command: Command) -> Result<()> {
             log::info!("cli: switch --share={} --to={}", share, to.short_label());
             cmd_switch(&share, to)
         }
-        Command::MountBackends(target) => {
-            log::info!(
-                "cli: mount-backends --all={} --share={:?}",
-                target.all,
-                target.share
-            );
-            cmd_mount_backends(target)
-        }
         Command::Verify { target, json } => {
             log::info!(
                 "cli: verify --all={} --share={:?} --json={}",
@@ -170,30 +162,60 @@ fn cmd_status(all: bool, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_switch(share: &str, to: Backend) -> Result<()> {
+fn cmd_switch(share_name: &str, to: Backend) -> Result<()> {
     let cfg = config::load()?;
     ensure_has_shares(&cfg)?;
 
-    let mut state = engine::load_runtime_state().unwrap_or_default();
-    let status = engine::switch_share(&cfg, &mut state, share, to)?;
-    engine::save_runtime_state(&state)?;
-
-    print_status_table(&[status]);
-    Ok(())
-}
-
-fn cmd_mount_backends(target: MultiShareTarget) -> Result<()> {
-    let cfg = config::load()?;
-    ensure_has_shares(&cfg)?;
-
-    let names = resolve_target_shares(&cfg, &target)?;
+    let share = config::find_share(&cfg, share_name)
+        .ok_or_else(|| anyhow!("share '{}' is not configured", share_name))?
+        .clone();
 
     let mut state = engine::load_runtime_state().unwrap_or_default();
-    let statuses = engine::mount_backends_for_shares(&cfg, &mut state, &names)?;
-    engine::save_runtime_state(&state)?;
 
-    print_status_table(&statuses);
-    Ok(())
+    let from = state
+        .shares
+        .get(&share_name.to_ascii_lowercase())
+        .and_then(|e| e.active_backend)
+        .ok_or_else(|| {
+            anyhow!(
+                "share '{}' has no active backend to switch from",
+                share_name
+            )
+        })?;
+
+    if from == to {
+        println!("{} is already on {}", share_name, to.short_label());
+        return Ok(());
+    }
+
+    match engine::switch_backend_single_mount(&cfg, &mut state, &share, from, to, false) {
+        engine::SwitchResult::Success => {
+            engine::save_runtime_state(&state)?;
+            let statuses = engine::verify_all(&cfg, &mut state);
+            print_status_table(&statuses);
+            Ok(())
+        }
+        engine::SwitchResult::BusyOpenFiles => Err(anyhow!(
+            "cannot switch '{}': open files detected. Close files and retry, or use --force",
+            share_name
+        )),
+        engine::SwitchResult::UnmountFailed(e) => Err(anyhow!(
+            "cannot switch '{}': unmount failed: {}",
+            share_name,
+            e
+        )),
+        engine::SwitchResult::MountFailed { error, rolled_back } => {
+            if rolled_back {
+                engine::save_runtime_state(&state)?;
+            }
+            Err(anyhow!(
+                "cannot switch '{}': mount failed: {} (rolled back: {})",
+                share_name,
+                error,
+                rolled_back
+            ))
+        }
+    }
 }
 
 fn cmd_verify(target: MultiShareTarget, json: bool) -> Result<()> {
