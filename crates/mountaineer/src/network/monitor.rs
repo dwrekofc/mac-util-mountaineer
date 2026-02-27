@@ -2,7 +2,7 @@ use std::sync::mpsc;
 use std::thread;
 
 use core_foundation::array::CFArray;
-use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
+use core_foundation::runloop::{CFRunLoop, kCFRunLoopCommonModes};
 use core_foundation::string::CFString;
 use system_configuration::dynamic_store::{
     SCDynamicStore, SCDynamicStoreBuilder, SCDynamicStoreCallBackContext,

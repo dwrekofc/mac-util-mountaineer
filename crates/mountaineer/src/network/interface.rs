@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use nix::ifaddrs::getifaddrs;
-use system_configuration::network_configuration::{get_interfaces, SCNetworkInterfaceType};
+use system_configuration::network_configuration::{SCNetworkInterfaceType, get_interfaces};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum InterfaceType {

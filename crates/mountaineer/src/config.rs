@@ -119,16 +119,16 @@ fn default_single_mount_mode() -> bool {
 }
 
 pub fn config_path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("~/.config"))
-        .join("mountaineer")
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("/"))
+        .join(".mountaineer")
         .join("config.toml")
 }
 
 pub fn state_path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("~/.config"))
-        .join("mountaineer")
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("/"))
+        .join(".mountaineer")
         .join("state.json")
 }
 
@@ -161,10 +161,10 @@ pub fn expand_path(path: &str) -> PathBuf {
         return dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
     }
 
-    if let Some(rest) = path.strip_prefix("~/") {
-        if let Some(home) = dirs::home_dir() {
-            return home.join(rest);
-        }
+    if let Some(rest) = path.strip_prefix("~/")
+        && let Some(home) = dirs::home_dir()
+    {
+        return home.join(rest);
     }
 
     PathBuf::from(path)
@@ -256,8 +256,10 @@ mod tests {
             target_subpath: "dev/projects".to_string(),
         };
         let target = alias_target_path(&cfg, &alias);
-        assert!(target
-            .to_string_lossy()
-            .ends_with("/Shares/CORE/dev/projects"));
+        assert!(
+            target
+                .to_string_lossy()
+                .ends_with("/Shares/CORE/dev/projects")
+        );
     }
 }

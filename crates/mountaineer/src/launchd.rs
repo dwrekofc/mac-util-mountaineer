@@ -160,10 +160,10 @@ fn is_not_loaded_error(message: &str) -> bool {
 }
 
 fn current_uid() -> Option<u32> {
-    if let Ok(uid) = std::env::var("UID") {
-        if let Ok(uid) = uid.parse::<u32>() {
-            return Some(uid);
-        }
+    if let Ok(uid) = std::env::var("UID")
+        && let Ok(uid) = uid.parse::<u32>()
+    {
+        return Some(uid);
     }
 
     let output = Command::new("id").arg("-u").output().ok()?;

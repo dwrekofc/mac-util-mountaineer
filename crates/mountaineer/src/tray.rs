@@ -35,6 +35,7 @@ pub fn install(cx: &mut App) {
         .expect("failed to build tray icon");
 
     // Keep tray alive
+    #[allow(clippy::arc_with_non_send_sync)]
     let tray = Arc::new(Mutex::new(tray));
 
     // Clone for the event handler
@@ -83,7 +84,7 @@ pub fn install(cx: &mut App) {
             // Rebuild menu with updated state
             let new_menu = build_dynamic_menu(&state_for_reconcile);
             if let Ok(tray) = tray_for_reconcile.lock() {
-                let _ = tray.set_menu(Some(Box::new(new_menu)));
+                tray.set_menu(Some(Box::new(new_menu)));
             }
 
             cx.background_executor()
@@ -227,7 +228,7 @@ fn handle_switch(
             drop(guard);
             let new_menu = build_dynamic_menu(state);
             if let Ok(tray) = tray.lock() {
-                let _ = tray.set_menu(Some(Box::new(new_menu)));
+                tray.set_menu(Some(Box::new(new_menu)));
             }
         }
         SwitchResult::BusyOpenFiles => {
@@ -309,12 +310,12 @@ fn build_dynamic_menu(state: &Arc<Mutex<TrayState>>) -> Menu {
 
         if other_reachable {
             let switch_label = if tb_pending && other_backend == Backend::Tb {
-                format!("⚡ Switch to TB (available)")
+                "⚡ Switch to TB (available)".to_string()
             } else {
                 format!("Switch to {}", other_backend.short_label())
             };
             let switch_item = MenuItem::with_id(
-                &format!("switch-{}-{}", status.name, other_backend.short_label()),
+                format!("switch-{}-{}", status.name, other_backend.short_label()),
                 &switch_label,
                 true,
                 None,
@@ -335,7 +336,7 @@ fn build_dynamic_menu(state: &Arc<Mutex<TrayState>>) -> Menu {
             if status.tb.ready { "(mounted)" } else { "" }
         );
         let tb_item =
-            MenuItem::with_id(&format!("info-tb-{}", status.name), &tb_status, false, None);
+            MenuItem::with_id(format!("info-tb-{}", status.name), &tb_status, false, None);
         let _ = submenu.append(&tb_item);
 
         let fb_status = format!(
@@ -352,7 +353,7 @@ fn build_dynamic_menu(state: &Arc<Mutex<TrayState>>) -> Menu {
             }
         );
         let fb_item =
-            MenuItem::with_id(&format!("info-fb-{}", status.name), &fb_status, false, None);
+            MenuItem::with_id(format!("info-fb-{}", status.name), &fb_status, false, None);
         let _ = submenu.append(&fb_item);
 
         let _ = menu.append(&submenu);

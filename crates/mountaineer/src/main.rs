@@ -1,6 +1,6 @@
 #![allow(unexpected_cfgs)]
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use clap::Parser;
 
 mod cli;
@@ -11,6 +11,7 @@ mod gui;
 mod launchd;
 mod logging;
 mod mount;
+mod network;
 mod tray;
 
 use cli::{AliasCommand, Cli, Command, FavoritesCommand, MultiShareTarget};
@@ -522,9 +523,5 @@ fn print_status_table(statuses: &[engine::ShareStatus]) {
 }
 
 fn yes_no(value: bool) -> &'static str {
-    if value {
-        "yes"
-    } else {
-        "no"
-    }
+    if value { "yes" } else { "no" }
 }

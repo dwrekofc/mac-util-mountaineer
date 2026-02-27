@@ -286,10 +286,10 @@ fn adopt_existing_mount(mount_point: &Path, existing_mount: &Path) -> Result<(),
 
     if let Ok(meta) = fs::symlink_metadata(mount_point) {
         if meta.file_type().is_symlink() {
-            if let Some(current_target) = resolve_symlink_target(mount_point) {
-                if paths_match(&current_target, existing_mount) {
-                    return Ok(());
-                }
+            if let Some(current_target) = resolve_symlink_target(mount_point)
+                && paths_match(&current_target, existing_mount)
+            {
+                return Ok(());
             }
             fs::remove_file(mount_point).map_err(|err| MountError::MountFailed {
                 stderr: format!(

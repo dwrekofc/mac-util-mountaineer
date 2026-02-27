@@ -68,23 +68,23 @@ fn parse_mount_smbfs() -> Vec<(String, String, String)> {
     for line in stdout.lines() {
         // Format: //user@server/SHARE on /mount/point (smbfs, ...)
         // or:     //server/SHARE on /mount/point (smbfs, ...)
-        if let Some((smb_part, rest)) = line.split_once(" on ") {
-            if let Some((mount_point, _flags)) = rest.split_once(" (") {
-                let path = smb_part.trim_start_matches("//");
-                // Strip optional user@ prefix
-                let path = if let Some((_user, after_at)) = path.split_once('@') {
-                    after_at
-                } else {
-                    path
-                };
-                // Split server/share
-                if let Some((server, share)) = path.split_once('/') {
-                    mounts.push((
-                        server.to_string(),
-                        share.to_string(),
-                        mount_point.to_string(),
-                    ));
-                }
+        if let Some((smb_part, rest)) = line.split_once(" on ")
+            && let Some((mount_point, _flags)) = rest.split_once(" (")
+        {
+            let path = smb_part.trim_start_matches("//");
+            // Strip optional user@ prefix
+            let path = if let Some((_user, after_at)) = path.split_once('@') {
+                after_at
+            } else {
+                path
+            };
+            // Split server/share
+            if let Some((server, share)) = path.split_once('/') {
+                mounts.push((
+                    server.to_string(),
+                    share.to_string(),
+                    mount_point.to_string(),
+                ));
             }
         }
     }
@@ -141,12 +141,12 @@ fn parse_smbutil_statshares() -> HashMap<String, String> {
             if parts.len() == 2 {
                 let key = parts[0].trim();
                 let value = parts[1].trim();
-                if key == "SMB_VERSION" {
-                    if let Some(ref share) = current_share {
-                        // Clean up the version string (e.g., "SMB_3.0.2" -> "SMB 3.0.2")
-                        let clean = value.replace('_', " ");
-                        result.insert(share.clone(), clean);
-                    }
+                if key == "SMB_VERSION"
+                    && let Some(ref share) = current_share
+                {
+                    // Clean up the version string (e.g., "SMB_3.0.2" -> "SMB 3.0.2")
+                    let clean = value.replace('_', " ");
+                    result.insert(share.clone(), clean);
                 }
             }
         }

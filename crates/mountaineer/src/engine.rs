@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -403,10 +403,8 @@ pub fn unmount_all(config: &Config, state: &mut RuntimeState) -> Vec<UnmountResu
             results.push(result);
         }
 
-        let stable = config::share_stable_path(config, &share.name);
-        if is_symlink(&stable) {
-            let _ = fs::remove_file(&stable);
-        }
+        // Stable symlinks are preserved across unmount per spec 05/08.
+        // They are only removed on explicit `favorites remove --cleanup`.
 
         let entry = state_entry_mut(state, &share.name);
         entry.active_backend = None;
@@ -943,12 +941,13 @@ fn choose_desired_backend(
                 return Some(Backend::Fallback);
             }
 
-            if tb_ready && auto_failback {
-                if let Some(since) = tb_stability_since {
-                    let stable_for = (now - since).num_seconds().max(0) as u64;
-                    if stable_for >= failback_stable_secs {
-                        return Some(Backend::Tb);
-                    }
+            if tb_ready
+                && auto_failback
+                && let Some(since) = tb_stability_since
+            {
+                let stable_for = (now - since).num_seconds().max(0) as u64;
+                if stable_for >= failback_stable_secs {
+                    return Some(Backend::Tb);
                 }
             }
             Some(Backend::Fallback)
@@ -995,12 +994,13 @@ fn choose_desired_backend_single_mount(
             }
 
             // Both available - check auto_failback
-            if tb_reachable && auto_failback {
-                if let Some(since) = tb_stability_since {
-                    let stable_for = (now - since).num_seconds().max(0) as u64;
-                    if stable_for >= failback_stable_secs {
-                        return Some(Backend::Tb);
-                    }
+            if tb_reachable
+                && auto_failback
+                && let Some(since) = tb_stability_since
+            {
+                let stable_for = (now - since).num_seconds().max(0) as u64;
+                if stable_for >= failback_stable_secs {
+                    return Some(Backend::Tb);
                 }
             }
             Some(Backend::Fallback)

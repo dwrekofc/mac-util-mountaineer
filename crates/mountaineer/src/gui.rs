@@ -1,7 +1,7 @@
 use gpui::*;
 
 pub fn run() {
-    Application::new().run(|cx: &mut App| {
+    gpui_platform::application().run(|cx: &mut App| {
         // Override GPUI's Regular activation policy → Accessory (no dock icon)
         #[cfg(target_os = "macos")]
         unsafe {
