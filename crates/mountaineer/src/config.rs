@@ -125,7 +125,48 @@ pub fn load() -> Result<Config> {
         .with_context(|| format!("failed reading config {}", path.display()))?;
     let config: Config = toml::from_str(&contents)
         .with_context(|| format!("failed parsing TOML {}", path.display()))?;
+    validate(&config)?;
     Ok(config)
+}
+
+/// Validate config on load per spec 02: reject duplicate share names,
+/// empty required fields, and duplicate alias names.
+fn validate(config: &Config) -> Result<()> {
+    let mut seen_shares = std::collections::HashSet::new();
+    for share in &config.shares {
+        if share.name.trim().is_empty() {
+            anyhow::bail!("config error: share has empty name");
+        }
+        if share.thunderbolt_host.trim().is_empty() {
+            anyhow::bail!(
+                "config error: share '{}' has empty thunderbolt_host",
+                share.name
+            );
+        }
+        if share.fallback_host.trim().is_empty() {
+            anyhow::bail!(
+                "config error: share '{}' has empty fallback_host",
+                share.name
+            );
+        }
+        let key = share.name.to_ascii_lowercase();
+        if !seen_shares.insert(key) {
+            anyhow::bail!("config error: duplicate share name '{}'", share.name);
+        }
+    }
+
+    let mut seen_aliases = std::collections::HashSet::new();
+    for alias in &config.aliases {
+        if alias.name.trim().is_empty() {
+            anyhow::bail!("config error: alias has empty name");
+        }
+        let key = alias.name.to_ascii_lowercase();
+        if !seen_aliases.insert(key) {
+            anyhow::bail!("config error: duplicate alias name '{}'", alias.name);
+        }
+    }
+
+    Ok(())
 }
 
 pub fn save(config: &Config) -> Result<()> {
@@ -194,13 +235,6 @@ pub fn find_share<'a>(config: &'a Config, name: &str) -> Option<&'a ShareConfig>
         .find(|s| s.name.eq_ignore_ascii_case(name))
 }
 
-pub fn find_share_mut<'a>(config: &'a mut Config, name: &str) -> Option<&'a mut ShareConfig> {
-    config
-        .shares
-        .iter_mut()
-        .find(|s| s.name.eq_ignore_ascii_case(name))
-}
-
 pub fn normalize_alias_path(path: &Path) -> String {
     path.to_string_lossy().to_string()
 }
@@ -230,5 +264,122 @@ mod tests {
                 .to_string_lossy()
                 .ends_with("/Shares/CORE/dev/projects")
         );
+    }
+
+    fn make_share(name: &str) -> ShareConfig {
+        ShareConfig {
+            name: name.to_string(),
+            username: "user".to_string(),
+            thunderbolt_host: "10.0.0.1".to_string(),
+            fallback_host: "192.168.1.1".to_string(),
+            share_name: name.to_string(),
+        }
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_share_names() {
+        let cfg = Config {
+            shares: vec![make_share("CORE"), make_share("core")],
+            ..Config::default()
+        };
+        let err = validate(&cfg).unwrap_err();
+        assert!(err.to_string().contains("duplicate share name"));
+    }
+
+    #[test]
+    fn validate_rejects_empty_share_name() {
+        let mut share = make_share("");
+        share.name = "  ".to_string();
+        let cfg = Config {
+            shares: vec![share],
+            ..Config::default()
+        };
+        let err = validate(&cfg).unwrap_err();
+        assert!(err.to_string().contains("empty name"));
+    }
+
+    #[test]
+    fn validate_rejects_empty_thunderbolt_host() {
+        let mut share = make_share("CORE");
+        share.thunderbolt_host = "".to_string();
+        let cfg = Config {
+            shares: vec![share],
+            ..Config::default()
+        };
+        let err = validate(&cfg).unwrap_err();
+        assert!(err.to_string().contains("empty thunderbolt_host"));
+    }
+
+    #[test]
+    fn validate_rejects_empty_fallback_host() {
+        let mut share = make_share("CORE");
+        share.fallback_host = " ".to_string();
+        let cfg = Config {
+            shares: vec![share],
+            ..Config::default()
+        };
+        let err = validate(&cfg).unwrap_err();
+        assert!(err.to_string().contains("empty fallback_host"));
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_alias_names() {
+        let cfg = Config {
+            aliases: vec![
+                AliasConfig {
+                    name: "projects".to_string(),
+                    path: "~/Shares/Links/projects".to_string(),
+                    share: "CORE".to_string(),
+                    target_subpath: "dev/projects".to_string(),
+                },
+                AliasConfig {
+                    name: "PROJECTS".to_string(),
+                    path: "~/Shares/Links/projects2".to_string(),
+                    share: "CORE".to_string(),
+                    target_subpath: "dev/projects2".to_string(),
+                },
+            ],
+            ..Config::default()
+        };
+        let err = validate(&cfg).unwrap_err();
+        assert!(err.to_string().contains("duplicate alias name"));
+    }
+
+    #[test]
+    fn validate_accepts_valid_config() {
+        let cfg = Config {
+            shares: vec![make_share("CORE"), make_share("DATA")],
+            aliases: vec![AliasConfig {
+                name: "projects".to_string(),
+                path: "~/Shares/Links/projects".to_string(),
+                share: "CORE".to_string(),
+                target_subpath: "dev/projects".to_string(),
+            }],
+            ..Config::default()
+        };
+        validate(&cfg).expect("valid config should pass validation");
+    }
+
+    #[test]
+    fn config_roundtrip_toml() {
+        let cfg = Config {
+            global: GlobalConfig {
+                lsof_recheck: false,
+                auto_failback: true,
+                check_interval_secs: 5,
+                connect_timeout_ms: 1500,
+                ..GlobalConfig::default()
+            },
+            shares: vec![make_share("CORE")],
+            ..Config::default()
+        };
+        let toml_str = toml::to_string_pretty(&cfg).unwrap();
+        let parsed: Config = toml::from_str(&toml_str).unwrap();
+        assert!(!parsed.global.lsof_recheck);
+        assert!(parsed.global.auto_failback);
+        assert_eq!(parsed.global.check_interval_secs, 5);
+        assert_eq!(parsed.global.connect_timeout_ms, 1500);
+        assert_eq!(parsed.shares.len(), 1);
+        assert_eq!(parsed.shares[0].name, "CORE");
     }
 }

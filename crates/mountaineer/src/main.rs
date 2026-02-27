@@ -14,7 +14,7 @@ mod mount;
 mod network;
 mod tray;
 
-use cli::{AliasCommand, Cli, Command, FavoritesCommand, MultiShareTarget};
+use cli::{AliasCommand, Cli, Command, ConfigCommand, FavoritesCommand, MultiShareTarget};
 use config::{AliasConfig, Backend, Config, ShareConfig};
 
 fn main() -> Result<()> {
@@ -97,6 +97,10 @@ fn run_cli(command: Command) -> Result<()> {
         Command::Favorites { command } => {
             log::info!("cli: favorites command");
             cmd_favorites(command)
+        }
+        Command::Config { command } => {
+            log::info!("cli: config command");
+            cmd_config(command)
         }
         Command::Install => {
             log::info!("cli: install");
@@ -254,7 +258,9 @@ fn cmd_mount(all: bool) -> Result<()> {
     ensure_has_shares(&cfg)?;
 
     let mut state = engine::load_runtime_state().unwrap_or_default();
-    let statuses = engine::reconcile_all(&cfg, &mut state);
+    // Use mount_all (not reconcile_all) so already-mounted shares are left
+    // untouched — no failover or recovery is triggered. Per spec 08.
+    let statuses = engine::mount_all(&cfg, &mut state);
     engine::save_runtime_state(&state)?;
     print_status_table(&statuses);
     Ok(())
@@ -397,17 +403,25 @@ fn cmd_favorites(command: FavoritesCommand) -> Result<()> {
                 share_name: remote_share.unwrap_or_else(|| share.clone()),
             };
 
-            let updated = engine::add_or_update_share(&mut cfg, share_cfg);
+            engine::add_share(&mut cfg, share_cfg)?;
             config::save(&cfg)?;
+            println!("Added favorite '{}'.", share);
 
+            // Attempt immediate mount — non-fatal if it fails, since the monitor
+            // loop will retry. Config and symlink are already persisted.
             let mut state = engine::load_runtime_state().unwrap_or_default();
-            let _ = engine::reconcile_selected(&cfg, &mut state, std::slice::from_ref(&share))?;
-            engine::save_runtime_state(&state)?;
-
-            if updated {
-                println!("Updated favorite '{}'.", share);
-            } else {
-                println!("Added favorite '{}'.", share);
+            match engine::reconcile_selected(&cfg, &mut state, std::slice::from_ref(&share)) {
+                Ok(statuses) => {
+                    engine::save_runtime_state(&state)?;
+                    for status in &statuses {
+                        if let Some(err) = &status.last_error {
+                            eprintln!("warning: initial mount for '{}' failed: {}", share, err);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("warning: initial mount for '{}' failed: {}", share, e);
+                }
             }
             Ok(())
         }
@@ -474,6 +488,83 @@ fn cmd_favorites(command: FavoritesCommand) -> Result<()> {
             }
             Ok(())
         }
+    }
+}
+
+fn cmd_config(command: ConfigCommand) -> Result<()> {
+    match command {
+        ConfigCommand::Set { key, value } => {
+            let mut cfg = config::load()?;
+            match key.as_str() {
+                "lsof-recheck" => {
+                    cfg.global.lsof_recheck = parse_on_off(&value)?;
+                    println!(
+                        "lsof-recheck = {}",
+                        if cfg.global.lsof_recheck { "on" } else { "off" }
+                    );
+                }
+                "auto-failback" => {
+                    cfg.global.auto_failback = parse_on_off(&value)?;
+                    println!(
+                        "auto-failback = {}",
+                        if cfg.global.auto_failback {
+                            "on"
+                        } else {
+                            "off"
+                        }
+                    );
+                }
+                "check-interval" => {
+                    let secs: u64 = value
+                        .parse()
+                        .map_err(|_| anyhow!("invalid number: {}", value))?;
+                    if secs == 0 {
+                        return Err(anyhow!("check-interval must be >= 1"));
+                    }
+                    cfg.global.check_interval_secs = secs;
+                    println!("check-interval = {}s", secs);
+                }
+                "connect-timeout" => {
+                    let ms: u64 = value
+                        .parse()
+                        .map_err(|_| anyhow!("invalid number: {}", value))?;
+                    if ms == 0 {
+                        return Err(anyhow!("connect-timeout must be >= 1"));
+                    }
+                    cfg.global.connect_timeout_ms = ms;
+                    println!("connect-timeout = {}ms", ms);
+                }
+                _ => {
+                    return Err(anyhow!(
+                        "unknown config key '{}'. valid keys: lsof-recheck, auto-failback, check-interval, connect-timeout",
+                        key
+                    ));
+                }
+            }
+            config::save(&cfg)?;
+            Ok(())
+        }
+        ConfigCommand::Show => {
+            let cfg = config::load()?;
+            println!("shares_root = {}", cfg.global.shares_root);
+            println!("check_interval_secs = {}", cfg.global.check_interval_secs);
+            println!("auto_failback = {}", cfg.global.auto_failback);
+            println!(
+                "auto_failback_stable_secs = {}",
+                cfg.global.auto_failback_stable_secs
+            );
+            println!("connect_timeout_ms = {}", cfg.global.connect_timeout_ms);
+            println!("lsof_recheck = {}", cfg.global.lsof_recheck);
+            Ok(())
+        }
+    }
+}
+
+fn parse_on_off(value: &str) -> Result<bool> {
+    match value.to_ascii_lowercase().as_str() {
+        "on" | "true" | "1" | "yes" => Ok(true),
+        "off" | "false" | "0" | "no" => Ok(false),
+        _ => Err(anyhow!("invalid value '{}': expected on|off", value)),
     }
 }
 

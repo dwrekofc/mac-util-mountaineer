@@ -138,6 +138,20 @@ pub fn reconcile_all(config: &Config, state: &mut RuntimeState) -> Vec<ShareStat
     statuses
 }
 
+/// Mount-only reconciliation: attempts to mount unmounted shares but does NOT
+/// trigger failover or recovery on already-mounted shares (auto_switch=false).
+/// Per spec 08: "Skip shares that are already mounted — do not unmount and remount."
+pub fn mount_all(config: &Config, state: &mut RuntimeState) -> Vec<ShareStatus> {
+    let now = Utc::now();
+    let statuses: Vec<ShareStatus> = config
+        .shares
+        .iter()
+        .map(|share| reconcile_share(config, state, share, true, false, now))
+        .collect();
+    let _ = reconcile_aliases(config);
+    statuses
+}
+
 pub fn reconcile_selected(
     config: &Config,
     state: &mut RuntimeState,
@@ -223,9 +237,51 @@ pub fn switch_backend_single_mount(
         );
     }
 
+    // Step 2.5: Pre-cleanup — detect and force-unmount stale mounts at the target path
+    // per spec 03. A stale mount is one that is reported as mounted but is not alive
+    // (hung/unresponsive). Without cleanup, mount_share would fail on an occupied path.
+    if mount::smb::is_mounted(&mount_point) && !mount::smb::is_mount_alive(&mount_point) {
+        log::warn!(
+            "{}: stale mount detected at {}, force-unmounting before remount",
+            share.name,
+            mount_point.display()
+        );
+        if let Err(e) = mount::smb::unmount(&mount_point) {
+            log::error!(
+                "{}: failed to clean up stale mount at {}: {}",
+                share.name,
+                mount_point.display(),
+                e
+            );
+        }
+    }
+
     // Step 3: Mount new backend at the same /Volumes/<SHARE> path
+    // Per spec 03: if mount fails, retry once before rolling back.
     let mount_result =
         mount::smb::mount_share(to_host, &share.share_name, &share.username, &mount_point);
+
+    let mount_result = match mount_result {
+        Err(first_err) => {
+            log::warn!(
+                "{}: first mount attempt for {} failed: {}, retrying once",
+                share.name,
+                to.short_label(),
+                first_err
+            );
+            mount::smb::mount_share(to_host, &share.share_name, &share.username, &mount_point)
+                .map_err(|retry_err| {
+                    log::error!(
+                        "{}: retry mount for {} also failed: {}",
+                        share.name,
+                        to.short_label(),
+                        retry_err
+                    );
+                    retry_err
+                })
+        }
+        ok => ok,
+    };
 
     match mount_result {
         Ok(()) => {
@@ -448,13 +504,18 @@ pub fn remove_alias(config: &mut Config, name: &str) -> Result<AliasConfig> {
     Ok(config.aliases.remove(idx))
 }
 
-pub fn add_or_update_share(config: &mut Config, share: ShareConfig) -> bool {
-    if let Some(existing) = config::find_share_mut(config, &share.name) {
-        *existing = share;
-        return true;
+/// Add a new share to the config. Returns an error if a share with the same name
+/// already exists (case-insensitive). Per spec 06, duplicate share names must be
+/// rejected on add — users should edit config.toml directly to modify existing shares.
+pub fn add_share(config: &mut Config, share: ShareConfig) -> Result<()> {
+    if config::find_share(config, &share.name).is_some() {
+        return Err(anyhow!(
+            "favorite '{}' already exists. edit ~/.mountaineer/config.toml to modify it",
+            share.name
+        ));
     }
     config.shares.push(share);
-    false
+    Ok(())
 }
 
 pub fn remove_share(config: &mut Config, share_name: &str) -> Option<ShareConfig> {

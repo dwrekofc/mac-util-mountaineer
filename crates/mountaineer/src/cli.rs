@@ -79,10 +79,28 @@ pub enum Command {
         #[command(subcommand)]
         command: FavoritesCommand,
     },
+    /// View or modify configuration settings
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
     /// Install LaunchAgent to start Mountaineer at login
     Install,
     /// Remove LaunchAgent
     Uninstall,
+}
+
+#[derive(Subcommand)]
+pub enum ConfigCommand {
+    /// Set a configuration value
+    Set {
+        /// Configuration key (lsof-recheck, auto-failback, check-interval, connect-timeout)
+        key: String,
+        /// Configuration value (on/off for toggles, number for intervals)
+        value: String,
+    },
+    /// Show current configuration
+    Show,
 }
 
 #[derive(Debug, Clone, Args)]

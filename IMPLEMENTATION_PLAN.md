@@ -3,7 +3,7 @@
 # Mountaineer V2 — Implementation Plan
 
 > Last updated: 2026-02-27
-> Status: Active — P0.0–P0.8 complete; P1.1, P1.2, P1.5, P1.6, P1.7, P1.8, P1.9, P1.11, P3.5 complete.
+> Status: Active — P0.0–P0.8 complete; P1.1–P1.5, P1.6–P1.15, P3.5 complete. Remaining: P2.x, P3.x, P4.x–P7.x.
 
 Items are sorted by priority. Each item references the authoritative spec(s).
 Items marked **[DONE]** are confirmed complete against their spec.
@@ -86,27 +86,11 @@ These must be resolved first. Every other item depends on correct foundations.
 
 ### P1.3 Implement `config set` CLI command
 - **Specs:** 10-cli-interface
-- **Status:** [MISSING]
-- **Files:** `crates/mountaineer/src/cli.rs`, `crates/mountaineer/src/main.rs`, `crates/mountaineer/src/config.rs`
-- **Evidence:**
-  - Spec 10 lists `config set lsof-recheck on|off` as a required command
-  - No `Config` variant exists in the `Command` enum (cli.rs:17-82)
-- **Work:**
-  - Add `Config` variant to `Command` enum with subcommands: `Set { key: String, value: String }`
-  - Support keys: `lsof-recheck` (on/off), `auto-failback` (on/off), `check-interval` (seconds), `connect-timeout` (ms)
-  - Handler loads config, modifies field, saves config
-  - Use atomic save (see P1.7)
+- **Status:** [DONE] — Added `Config` command with `Set` and `Show` subcommands. Supports keys: `lsof-recheck` (on/off), `auto-failback` (on/off), `check-interval` (seconds), `connect-timeout` (ms). Validates inputs (rejects 0 for intervals, parses on/off/true/false/yes/no). Uses atomic config save. `config show` displays all current settings.
 
 ### P1.4 Make `favorites add` reject duplicates instead of upsert
 - **Specs:** 06-favorites
-- **Status:** [PARTIAL] — `engine::add_or_update_share` upserts (returns `bool` for updated vs. added)
-- **Files:** `crates/mountaineer/src/engine.rs` (line 509), `crates/mountaineer/src/main.rs`
-- **Evidence:**
-  - `add_or_update_share` at engine.rs:509-516 does case-insensitive search and updates if found, adds if not — returns `bool` indicating update
-  - Spec 06: "Duplicate share names must be rejected on add"
-- **Work:**
-  - Rename to `add_share`; return `Err` if share name already exists (case-insensitive)
-  - Update `cmd_favorites_add` (main.rs:370) to handle/display the error
+- **Status:** [DONE] — Renamed `add_or_update_share` to `add_share`. Returns `Err` if share name already exists (case-insensitive). Removed dead `find_share_mut` function. CLI handler propagates the error to the user.
 
 ### P1.5 Add `tb_recovery_pending` to `ShareStatus` / JSON output
 - **Specs:** 09-share-status
@@ -173,17 +157,7 @@ These must be resolved first. Every other item depends on correct foundations.
 
 ### P1.10 Config validation on load
 - **Specs:** 02-config-and-state
-- **Status:** [MISSING]
-- **Files:** `crates/mountaineer/src/config.rs`
-- **Evidence:**
-  - `load()` at config.rs:135-146 only does `toml::from_str` — no field-level validation
-  - Spec 02 line 19: "MUST validate config on load: reject missing required fields, duplicate share names, invalid hosts"
-- **Work:**
-  - Reject duplicate share names (case-insensitive)
-  - Reject missing required fields (name, thunderbolt_host, fallback_host — serde will catch missing but not empty)
-  - Reject empty required string fields
-  - Reject duplicate alias names (case-insensitive)
-  - Warn on unreachable hosts (optional, could be runtime)
+- **Status:** [DONE] — Added `validate()` function called from `load()`. Rejects: empty share names, empty thunderbolt_host, empty fallback_host, duplicate share names (case-insensitive), empty alias names, duplicate alias names (case-insensitive). 7 new unit tests covering all validation paths plus a TOML roundtrip test. 32 total tests passing.
 
 ### P1.11 Config hot-reload in `cmd_monitor`
 - **Specs:** 11-background-monitoring
@@ -198,54 +172,19 @@ These must be resolved first. Every other item depends on correct foundations.
 
 ### P1.12 Implement failover retry policy
 - **Specs:** 03-failover
-- **Status:** [MISSING] — no retry logic exists
-- **Files:** `crates/mountaineer/src/engine.rs`
-- **Evidence:**
-  - Spec 03 line 14: "If Fallback mount fails after TB unmounted: retry Fallback once"
-  - `switch_backend_single_mount` at engine.rs:310-341 attempts mount once, then immediately attempts rollback on failure — no retry
-- **Work:**
-  - After a failed fallback mount in `switch_backend_single_mount`, retry once before rolling back
-  - Hardcode per spec (one retry)
+- **Status:** [DONE] — `switch_backend_single_mount` now retries mount once on failure before attempting rollback. Applies to all switch operations (failover and manual switch). Logged at warn level on first failure, error on retry failure.
 
 ### P1.13 Implement stale mount pre-cleanup before remount
 - **Specs:** 03-failover
-- **Status:** [PARTIAL] — `probe_backend` does stale mount cleanup (engine.rs:1039-1071) but `switch_backend_single_mount` does not
-- **Files:** `crates/mountaineer/src/engine.rs`
-- **Evidence:**
-  - Spec 03 line 20: "MUST detect and clean up stale/hung mounts before attempting remount"
-  - `probe_backend` (engine.rs:1039-1071) detects stale mounts (mounted && !alive) and force-unmounts them — but this only runs during reconciliation probes
-  - `switch_backend_single_mount` does NOT check for stale mounts at the target path before mounting
-  - Scenario: user triggers `switch --to tb`, the `/Volumes/<SHARE>` path has a stale FB mount, `mount_share` fails because path is occupied
-- **Work:**
-  - Before attempting a mount in `switch_backend_single_mount`, check if target path has a stale mount
-  - If stale mount detected (mounted but not alive), force-unmount it before attempting remount
-  - Log the stale mount cleanup action
+- **Status:** [DONE] — `switch_backend_single_mount` now checks for stale mounts (mounted but not alive) at the target path before attempting mount. Force-unmounts stale mounts with warning log. Prevents mount failures from occupied paths.
 
 ### P1.14 Fix `cmd_mount` to not trigger failover on already-mounted shares
 - **Specs:** 08-bulk-operations
-- **Status:** [PARTIAL] — `cmd_mount` delegates to `engine::reconcile_all` which runs full failover/recovery
-- **Files:** `crates/mountaineer/src/main.rs` (lines 218-231), `crates/mountaineer/src/engine.rs`
-- **Evidence:**
-  - `cmd_mount` at main.rs:222 calls `engine::reconcile_all(&cfg, &mut state)` — identical to `cmd_reconcile`
-  - `reconcile_all` calls `reconcile_share(... attempt_mount=true, auto_switch=true ...)` at engine.rs:129
-  - `auto_switch=true` enables failover and recovery logic on already-mounted shares
-  - Spec 08 line 8: "Skip shares that are already mounted — do not unmount and remount"
-  - Scenario: user runs `mount --all` to mount unmounted shares, but it unexpectedly triggers TB→fallback failover on a share that was mounted but whose TB went down during the last cycle
-- **Work:**
-  - Either: (a) Create a dedicated `mount_all` engine function that calls `reconcile_share` with `auto_switch=false`, or (b) Add a `mount_only: bool` parameter to `reconcile_all` that suppresses switch logic
-  - `mount --all` should mount unmounted shares via best interface but leave already-mounted shares untouched
+- **Status:** [DONE] — Added `engine::mount_all()` which calls `reconcile_share` with `attempt_mount=true, auto_switch=false`. `cmd_mount` now uses `mount_all` instead of `reconcile_all`. Already-mounted shares are left untouched — no failover or recovery is triggered.
 
 ### P1.15 Handle errors from `favorites add` reconcile
 - **Specs:** 06-favorites, 10-cli-interface
-- **Status:** [PARTIAL] — errors silently discarded
-- **Files:** `crates/mountaineer/src/main.rs` (line 374)
-- **Evidence:**
-  - `cmd_favorites add` at main.rs:374: `let _ = engine::reconcile_selected(&cfg, &mut state, std::slice::from_ref(&share))`
-  - The `Result` from `reconcile_selected` is discarded — if the initial mount after adding a favorite fails, no error is shown to the user
-  - Spec 06 line 8: "On add: create symlink, write share to config, attempt immediate mount"
-- **Work:**
-  - Unwrap the `Result` and report mount failures to the user
-  - Do not bail (the favorite was already saved successfully), but print the mount error
+- **Status:** [DONE] — Post-add reconcile result is now inspected. Mount failures are reported to stderr as warnings. Config and symlink persist regardless — the command exits successfully since the favorite was saved. Mount will retry on next reconcile cycle.
 
 ---
 
@@ -537,6 +476,16 @@ Phase 8: Test Coverage (P7.1 -> P7.5)
 ---
 
 ## Change Log
+
+### 2026-02-27 (v8 — P1 full completion)
+- **P1.3 [DONE]:** Added `config set` CLI command with `Set` and `Show` subcommands. Supports `lsof-recheck`, `auto-failback`, `check-interval`, `connect-timeout` keys. Validates inputs and uses atomic config save.
+- **P1.4 [DONE]:** Renamed `add_or_update_share` to `add_share`. Now rejects duplicate share names (case-insensitive) instead of upserting. Removed dead `find_share_mut` function.
+- **P1.10 [DONE]:** Added `validate()` function called from `load()`. Rejects empty required fields, duplicate share/alias names. 7 new unit tests.
+- **P1.12 [DONE]:** `switch_backend_single_mount` retries mount once on failure before rolling back. Per spec 03.
+- **P1.13 [DONE]:** `switch_backend_single_mount` now detects stale mounts (mounted but not alive) and force-unmounts them before attempting mount.
+- **P1.14 [DONE]:** Added `engine::mount_all()` with `auto_switch=false`. `cmd_mount` uses this instead of `reconcile_all` — leaves already-mounted shares untouched.
+- **P1.15 [DONE]:** `favorites add` now reports mount failures to stderr as warnings. Config persists regardless.
+- **32 tests pass.** No clippy warnings. All P1 items now complete.
 
 ### 2026-02-27 (v7 — P1 spec compliance batch)
 - **P1.1 [DONE]:** Added `--force` flag to `Switch` and `Unmount` CLI commands. `unmount_all` now accepts `force: bool` — skips open-file check and uses hard unmount when true.
