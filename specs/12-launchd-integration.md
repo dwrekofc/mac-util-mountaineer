@@ -15,7 +15,7 @@ Enables Mountaineer to start automatically at login and run as a menu bar access
 
 ## Constraints
 - Plist lives at `~/Library/LaunchAgents/` (user-level, not system-level)
-- The installed binary path must be resolved at install time (not hardcoded) `[needs-clarification: code currently hardcodes ~/Applications/Mountaineer.app/Contents/MacOS/Mountaineer — see Notes]`
+- The installed binary path is `~/Applications/Mountaineer.app/Contents/MacOS/Mountaineer` (standardized install location)
 - Install/uninstall use `launchctl bootstrap`/`launchctl bootout` with `gui/{uid}` domain `[observed from code]`
 
 ## Acceptance Criteria
@@ -29,6 +29,6 @@ Enables Mountaineer to start automatically at login and run as a menu bar access
 - `.planning/reqs-001.md` — JTBD 10
 
 ## Notes
-- **Hardcoded binary path** `[observed from code]`: `generate_plist()` in `launchd.rs` hardcodes the binary path to `~/Applications/Mountaineer.app/Contents/MacOS/Mountaineer`. The constraint says it should be resolved at install time. This limits installation to a specific app bundle location.
-- **`KeepAlive: false`** `[observed from code]`: The plist sets `KeepAlive = false`, meaning macOS will not restart the app if it crashes. `[needs-clarification: should KeepAlive be true for reliability?]`
+- **Hardcoded binary path is correct** `[observed from code]`: `generate_plist()` in `launchd.rs` hardcodes the binary path to `~/Applications/Mountaineer.app/Contents/MacOS/Mountaineer`. This is the standardized install location per spec.
+- **`KeepAlive` must use `SuccessfulExit = false`** `[observed from code]`: The plist currently sets `KeepAlive = false`. Must be changed to `KeepAlive = { SuccessfulExit = false }` so macOS auto-restarts on crash but not on clean quit.
 - **Modern launchctl API** `[observed from code]`: Code correctly uses `launchctl bootstrap gui/{uid}` and `launchctl bootout gui/{uid}` instead of the deprecated `load`/`unload` commands.

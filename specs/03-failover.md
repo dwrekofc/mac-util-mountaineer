@@ -10,7 +10,8 @@ Automatically switches a share from Thunderbolt to Fallback when the Thunderbolt
   1. Unmount the TB mount at `/Volumes/<SHARE>`
   2. Remount via Fallback host at the same `/Volumes/<SHARE>` path
 - Verify Fallback host is reachable before attempting remount
-- If Fallback is also unreachable, log the error and set `last_error` on the share — do not leave the share in a half-unmounted state if possible `[needs-clarification: spec 04 defines rollback for recovery but no equivalent rollback is specified for failover — what happens if Fallback mount fails after TB unmount?]`
+- If Fallback is also unreachable before unmounting TB, log the error and set `last_error` — do not unmount TB (nothing to fail over to)
+- If Fallback mount fails after TB has already been unmounted, retry the Fallback mount once, then leave unmounted with `last_error` set if second attempt also fails
 - Failover is automatic and fast — no user interaction required
 - After successful failover, update runtime state: `active_interface` = fallback, `last_switch_at` = now
 - The resulting volume path must be identical (`/Volumes/<SHARE>`) — no `-1` suffix
@@ -30,12 +31,13 @@ Automatically switches a share from Thunderbolt to Fallback when the Thunderbolt
 3. `~/Shares/<SHARE>` remains valid and resolves to the mounted share
 4. `active_interface` in state.json reads `fallback` after failover
 5. `last_error` is set if both TB and Fallback are unreachable
-6. Multiple shares fail over independently
+6. If Fallback mount fails after TB unmount, Fallback mount is retried once before giving up
+7. Multiple shares fail over independently
 
 ## Notes
 - **Two-phase mount strategy** `[observed from code]`: `mount::smb::mount_share` first attempts to mount via `osascript` (AppleScript Finder `mount volume` command), then falls back to `mount_smbfs` if that fails. The osascript approach integrates with macOS Keychain for authentication. This strategy is not specified in any requirement but affects mount behavior and reliability.
 - **Mount adoption** `[observed from code]`: If a share is already mounted at a different path (e.g., `/Volumes/CORE` exists from a previous session), the code adopts the existing mount rather than creating a duplicate. This prevents mount collisions but is not explicitly required by any spec.
-- **Failover rollback gap** `[needs-clarification]`: Spec 04 defines rollback (remount Fallback if TB mount fails after unmounting Fallback). This spec has no equivalent for the failover direction — if Fallback mount fails after TB unmount, the share is left unmounted with `last_error` set. Should failover also attempt rollback (remount TB)?
+- **Failover retry policy**: If Fallback mount fails after TB unmount, retry Fallback mount once. Do not attempt to remount TB (it was unreachable, which triggered failover). If retry fails, share remains unmounted with `last_error` until next reconcile cycle.
 
 ## References
 - `.planning/reqs-001.md` — JTBD 1, Core Design §6 (Recovery Policy)

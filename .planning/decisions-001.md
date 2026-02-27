@@ -3,8 +3,8 @@ session: "001"
 summary: "Mountaineer V2 — single-mount SMB failover with user-controlled recovery"
 reqs_file: ".planning/reqs-001.md"
 created: "2026-02-24"
-last_updated: "2026-02-24"
-status: "exploring"
+last_updated: "2026-02-27"
+status: "decided"
 ---
 
 # Decisions Log — Session 001
@@ -135,5 +135,140 @@ This log captures decisions, explorations, and preferences as they emerge during
 17. Quick Access Actions (Open Shares, Open Logs, Settings)
 
 **Date:** 2026-02-24
+
+---
+
+## Config and State Path — `~/.mountaineer/`
+
+**Status:** decided
+**Strength:** authoritative
+
+**Decision:** All Mountaineer config and state files live under `~/.mountaineer/`:
+- `~/.mountaineer/config.toml` — user-edited configuration
+- `~/.mountaineer/state.json` — machine-managed runtime state
+
+**Rationale:** Code currently uses `~/.config/mountaineer/` but this decision standardizes on `~/.mountaineer/` for simplicity. Single directory, easy to find.
+
+**Date:** 2026-02-27
+
+---
+
+## UI Framework — NOT GPUI
+
+**Status:** decided
+**Strength:** authoritative
+
+**Decision:** The menu bar UI must NOT use GPUI. Use native Swift or a lightweight macOS-native framework instead.
+
+**Rationale:** GPUI (from Zed) is too large a dependency for a menu-bar-only app. The current codebase uses GPUI (`gui.rs`, `tray.rs`) but this will be replaced.
+
+**Date:** 2026-02-27
+
+---
+
+## `auto_failback` Default — `false`
+
+**Status:** decided
+**Strength:** authoritative
+
+**Decision:** `auto_failback` defaults to `false`. User must explicitly enable auto-recovery.
+
+**Rationale:** Safer default — user should opt in to automatic interface switching. The reqs config example previously showed `true` but has been updated to match this decision.
+
+**Date:** 2026-02-27
+
+---
+
+## `lsof_recheck` — Toggleable Config Parameter
+
+**Status:** decided
+**Strength:** authoritative
+
+**Decision:** Add `lsof_recheck` (default `true`) to `[global]` config. When enabled, the reconcile loop re-checks `lsof` each cycle for shares with `tb_recovery_pending` and auto-switches when files close. User can toggle on/off via CLI (`config set lsof-recheck on|off`) and menu bar UI.
+
+**Rationale:** User explicitly requested periodic re-check with the ability to toggle it on/off from both CLI and menu bar.
+
+**Date:** 2026-02-27
+
+---
+
+## macOS Notifications — Deferred
+
+**Status:** decided
+**Strength:** authoritative
+
+**Decision:** macOS notification center integration (banners/alerts for TB recovery) is deferred to future roadmap. Menu bar indicator is sufficient for V2.
+
+**Date:** 2026-02-27
+
+---
+
+## Failover Retry Policy
+
+**Status:** decided
+**Strength:** authoritative
+
+**Decision:** If Fallback mount fails after TB has been unmounted during failover: retry the Fallback mount once. If the retry also fails, leave the share unmounted with `last_error` set. Do NOT attempt to remount TB (it was unreachable, which triggered failover). Next reconcile cycle will re-evaluate.
+
+**Date:** 2026-02-27
+
+---
+
+## `mount-backends` Command — Remove
+
+**Status:** decided
+**Strength:** authoritative
+
+**Decision:** The `mount-backends` CLI command must be removed. It is a dual-mount artifact that calls `engine::mount_backends_for_shares` and has no place in the single-mount architecture.
+
+**Date:** 2026-02-27
+
+---
+
+## LaunchAgent `KeepAlive` — Restart on Crash Only
+
+**Status:** decided
+**Strength:** authoritative
+
+**Decision:** Set `KeepAlive = { SuccessfulExit = false }` in the LaunchAgent plist. macOS will auto-restart Mountaineer on crash but NOT on clean quit.
+
+**Date:** 2026-02-27
+
+---
+
+## LaunchAgent Binary Path — Hardcoded
+
+**Status:** decided
+**Strength:** authoritative
+
+**Decision:** The plist binary path is hardcoded to `~/Applications/Mountaineer.app/Contents/MacOS/Mountaineer`. This is the standardized install location.
+
+**Date:** 2026-02-27
+
+---
+
+## Favorites `add` — Reject Duplicates
+
+**Status:** decided
+**Strength:** authoritative
+
+**Decision:** `favorites add` rejects duplicate share names with a clear error. If the share name already exists in favorites, the command fails. Users who need to change connection details (TB host, fallback host) should edit `config.toml` directly.
+
+**Rationale:** A favorite registers a share for management. The same share mounted via TB or FB is the same favorite — the interface is selected automatically. Once registered, connection details rarely change.
+
+**Date:** 2026-02-27
+
+---
+
+## Symlink Persistence on Unmount
+
+**Status:** decided
+**Strength:** authoritative
+
+**Decision:** `unmount --all` must NOT remove `~/Shares/<SHARE>` symlinks. Symlinks represent the favorites list and persist through unmount/remount cycles. Symlinks are only removed via `favorites remove --cleanup`.
+
+**Rationale:** Unmount is temporary (desk departure). Removing symlinks would break applications configured to use `~/Shares/<SHARE>` paths.
+
+**Date:** 2026-02-27
 
 ---

@@ -33,5 +33,5 @@ Manages the lifecycle of managed drives. Favorites are the canonical list of sha
 - `.planning/reqs-001.md` — JTBD 4, Core Design §4 (Favorites as Managed Drive Source)
 
 ## Notes
-- **Upsert behavior** `[observed from code]`: `add_or_update_share()` in `engine.rs` performs an upsert — if a share with the same name already exists, it updates the entry rather than rejecting it. The spec says "reject duplicates on add." Current code behavior may be preferable for editing favorites, but deviates from the spec.
-- **`--cleanup` flag not in CLI struct** `[observed from code]`: The `FavoritesCommand::Remove` variant in `cli.rs` needs verification that it includes a `--cleanup` flag. The engine's `cleanup_removed_share()` exists to perform the cleanup, but the CLI wiring should be confirmed.
+- **Upsert behavior must change to reject** `[observed from code]`: `add_or_update_share()` in `engine.rs` performs an upsert — if a share with the same name already exists, it updates the entry. Code must be changed to reject duplicates on `add` per spec. Users who need to change connection details should edit `config.toml` directly.
+- **`--cleanup` flag not in CLI struct** `[observed from code]`: The `FavoritesCommand::Remove` variant in `cli.rs` needs verification that it includes a `--cleanup` flag. The engine's `cleanup_removed_share()` exists to perform the cleanup, but the CLI wiring must be confirmed and fixed if missing.

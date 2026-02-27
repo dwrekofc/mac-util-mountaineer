@@ -7,6 +7,7 @@
 1. **Determine work mode and execute:**
 
    **A. If no specs exist yet** — create initial spec drafts from the requirements:
+   - Count the JTBDs in the reqs document. You MUST create at least one spec per JTBD. If a JTBD covers multiple distinct concerns or is too large to implement in a single build loop iteration (~128k token context window), split it into multiple specs. Prefer many small specs over few large specs.
    - Identify **Topics of Concern** from the reqs — distinct areas of the system that can each be described in one sentence WITHOUT using the word "and." If you need "and," it's two topics.
    - For each topic, create `specs/<topic-name>.md` using the template below. Use short, lowercase-hyphenated topic names.
    - Extract requirements from the reqs document. Every requirement should trace back to the reqs. If you infer something not explicitly stated, mark it with `[inferred]`.
@@ -81,3 +82,4 @@ Optional. Pointers to reference implementations or planning doc sections.
 99999999999. Do NOT delete or remove existing requirements from specs unless they directly contradict the reqs document. Refinement means adding clarity, not reducing scope.
 999999999999. This prompt runs AUTONOMOUSLY in a headless loop. Do NOT use AskUserQuestion or any interactive tools. Do NOT stop and wait for user input. Complete the full cycle (orient → refine → quality pass → commit) every iteration.
 9999999999999. Prefer conservative refinement over aggressive restructuring. Small improvements each iteration compound. Do not reorganize all specs in a single pass — focus on the highest-value refinements first.
+99999999999999. The number of spec files must ALWAYS be greater than or equal to the number of JTBDs in the requirements. If you have fewer specs than JTBDs, you must split specs until this invariant holds. Each spec should target a single, focused unit of work implementable in one build loop iteration.

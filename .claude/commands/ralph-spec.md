@@ -22,20 +22,24 @@ Ralph's planning loop (`PROMPT_plan.md`) reads every file in `specs/*` and compa
 
 3. Use `AskUserQuestion` to gather clarity on each outstanding question. Group related questions together. Help the user make decisions by presenting options with trade-offs where appropriate. Do not proceed until the user has answered.
 
+4. **Update source documents.** After resolving questions with the user, update the source `reqs-XXX.md` and `decisions-XXX.md` files to reflect any clarifications, corrections, or new decisions made during this session. These updates are authoritative — downstream processes (`loop.sh spec`, `loop.sh plan`) rely on these files being current. Do NOT leave answered questions or changed requirements only in conversation history.
+
 ### PHASE 2: Draft Outline (propose topics, get approval)
 
-4. Identify **Topics of Concern** — distinct areas of the system that can each be described in one sentence WITHOUT using the word "and." If you need "and," it's two topics.
+5. Identify **Topics of Concern** — distinct areas of the system that can each be described in one sentence WITHOUT using the word "and." If you need "and," it's two topics. You MUST create at least one topic per JTBD in the requirements. If a JTBD is too large to implement in a single context window (~128k tokens), split it into multiple smaller topics. Prefer many small specs over few large specs.
 
-5. Present a **draft outline** to the user in this exact format:
+6. Present a **draft outline** to the user in this exact format:
 
 ```
 PROPOSED TOPICS & SPECS
 =======================
 
 1. topic-name — One sentence describing scope.
+   Source: JTBD N
    Key reqs: bullet | bullet | bullet
 
 2. topic-name — One sentence describing scope.
+   Source: JTBD N, JTBD M
    Key reqs: bullet | bullet | bullet
 
 ...
@@ -44,11 +48,14 @@ PROPOSED TOPICS & SPECS
 Rules for the draft outline:
 - Use short, lowercase-hyphenated topic names (these become filenames: `specs/topic-name.md`)
 - One-sentence scope description — be specific, not vague
+- Each topic MUST include a `Source:` line mapping it to the JTBD(s) it traces to
 - "Key reqs" are 3-5 truncated bullet points (just enough to confirm scope, not full requirements)
 - Order topics by dependency (foundational topics first)
 - If the reqs have locked decisions, constraints, or design principles that apply to ALL topics, note them once under a header called `CROSS-CUTTING CONSTRAINTS` at the top
 
-6. **Stop and wait for user approval.** Do not write any spec files until the user confirms the topic list. The user may:
+7. **Validate coverage before presenting.** Before showing the outline to the user, verify: (a) every JTBD in the reqs has at least one corresponding topic, (b) no single topic covers more than one JTBD unless it is genuinely atomic. If a JTBD has no topic, add one. If a topic maps to multiple JTBDs, evaluate whether it should be split.
+
+8. **Stop and wait for user approval.** Do not write any spec files until the user confirms the topic list. The user may:
    - Approve as-is
    - Merge, split, rename, add, or remove topics
    - Adjust scope of individual topics
@@ -60,6 +67,9 @@ For each approved topic, write `specs/<topic-name>.md` using this structure:
 
 ```markdown
 # Topic Name
+
+## Source
+JTBD N: [title] | JTBD M: [title]
 
 ## Purpose
 One paragraph: what this part of the system does and why it exists.
@@ -90,6 +100,7 @@ Optional. Pointers to reference implementations, external codebases, or planning
 ```
 
 Rules for writing specs:
+- **Include a `## Source` section** at the top of each spec (after the title, before Purpose) listing which JTBD(s) and user stories this spec traces to. This enables traceability back to requirements.
 - **Extract, don't invent.** Every requirement should trace back to something in the reqs. If you infer something not explicitly stated, mark it with `[inferred]`.
 - **Requirements describe WHAT, not HOW.** "Support light and dark themes" not "Create a HashMap<String, Theme>."
 - **One spec per topic.** Don't split a topic across files or combine topics into one file.
@@ -114,8 +125,8 @@ Next step: ./loop.sh spec  (autonomous refinement)
 
 ## Important
 
+- **Backflow is mandatory.** Any clarifications, corrections, or decisions made during this interactive session are AUTHORITATIVE. Before writing specs, you MUST propagate these changes back to the reqs and decisions files. The reqs doc must always reflect the latest agreed-upon state. Downstream processes (`loop.sh spec`, `loop.sh plan`) read these files as the source of truth and will produce conflicts if they are stale.
 - PHASE 2 output is a SHORT draft for quick human review. Do NOT write full specs in Phase 2.
 - Do NOT create `specs/` files until the user explicitly approves the topic list.
-- Do NOT modify any existing non-spec files. Only create new files in `specs/`.
 - If requirements conflict with each other, note the conflict in the spec and ask the user to resolve it.
 - This command is for **collaborative creation**. For autonomous refinement of existing specs, use `./loop.sh spec`.

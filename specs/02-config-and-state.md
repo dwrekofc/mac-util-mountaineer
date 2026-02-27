@@ -6,7 +6,7 @@ Defines the configuration model (TOML) and runtime state persistence (JSON) that
 ## Requirements
 - Load configuration from `~/.mountaineer/config.toml`
 - Create default config with sensible defaults if file does not exist
-- Support `[global]` section with: `shares_root` (default `~/Shares`), `check_interval_secs` (default 2), `auto_failback` (default false), `auto_failback_stable_secs` (default 30), `connect_timeout_ms` (default 800), `lsof_recheck`
+- Support `[global]` section with: `shares_root` (default `~/Shares`), `check_interval_secs` (default 2), `auto_failback` (default `false`), `auto_failback_stable_secs` (default 30), `connect_timeout_ms` (default 800), `lsof_recheck` (default `true`)
 - Support `[[shares]]` array with per-share: `name`, `username`, `thunderbolt_host`, `fallback_host`, `share_name`
 - Support `[[aliases]]` array with per-alias: `name`, `path`, `share`, `target_subpath`
 - Expand `~/` to the user's home directory in all path fields
@@ -16,7 +16,7 @@ Defines the configuration model (TOML) and runtime state persistence (JSON) that
 - Support config hot-reload: detect changes to `config.toml` and apply without restart
 - Save runtime state after every state-changing operation
 - Validate config on load: reject missing required fields, duplicate share names, invalid hosts
-- Use `shares_root` config field as the root for all stable symlink paths and alias paths — do not hardcode `~/Shares/` `[inferred]`
+- Use `shares_root` config field as the root for all stable symlink paths and alias paths — do not hardcode `~/Shares/`
 
 ## Constraints
 - Config file is TOML; state file is JSON
@@ -38,9 +38,9 @@ Defines the configuration model (TOML) and runtime state persistence (JSON) that
 - `.planning/reqs-001.md` — Config Model (TOML), State Model
 
 ## Notes
-- **Config path mismatch** `[observed from code]`: Code loads config from `~/.config/mountaineer/config.toml` and state from `~/.config/mountaineer/state.json`. Spec says `~/.mountaineer/`. Needs alignment (see also spec 01 Notes).
-- **`mount_root` field still in code** `[observed from code]`: `GlobalConfig` in `config.rs` still has a `mount_root` field (default `~/.mountaineer/mnts`) which is used by `backend_mount_path()` for dual-mount mode. The reqs state `mount_root` is removed. This field should be removed along with the dual-mount code path.
-- **`single_mount_mode` toggle** `[observed from code]`: `GlobalConfig` has `single_mount_mode: bool` (default true). The reqs and specs treat single-mount as the only architecture, not a toggle. This field should be removed.
-- **`auto_failback` default** `[observed from code]`: Code defaults `auto_failback` to `false`; reqs §Config show it as `true`. Needs alignment.
-- **`lsof_recheck` not in code** `[observed from code]`: The `GlobalConfig` struct does not currently include a `lsof_recheck` field. The engine re-checks lsof every cycle when `tb_recovery_pending` is true regardless of a toggle. Implementation needed to match spec.
-- **Config validation** `[observed from code]`: Code does not currently validate for duplicate share names or invalid hosts on load — it returns `Config::default()` if the file is missing and parses what it finds.
+- **Config path mismatch** `[observed from code]`: Code loads config from `~/.config/mountaineer/config.toml` and state from `~/.config/mountaineer/state.json`. Code must be updated to use `~/.mountaineer/`.
+- **`mount_root` field must be removed** `[observed from code]`: `GlobalConfig` in `config.rs` still has a `mount_root` field (default `~/.mountaineer/mnts`) used by `backend_mount_path()` for dual-mount mode. This field must be removed along with all dual-mount code.
+- **`single_mount_mode` toggle must be removed** `[observed from code]`: `GlobalConfig` has `single_mount_mode: bool` (default true). Single-mount is the only architecture, not a toggle. This field must be removed.
+- **`auto_failback` default** `[observed from code]`: Code defaults `auto_failback` to `false`. This is correct per spec. The reqs config example shows `true` but the reqs example will be updated to match.
+- **`lsof_recheck` not in code** `[observed from code]`: The `GlobalConfig` struct does not currently include a `lsof_recheck` field. Must be added with default `true`.
+- **Config validation** `[observed from code]`: Code does not currently validate for duplicate share names or invalid hosts on load. Validation must be implemented.

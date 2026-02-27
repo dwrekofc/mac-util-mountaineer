@@ -58,9 +58,9 @@ macOS SMB sessions remain bound to the interface/IP they were established on. Ha
 - As a user, I want the switch to unmount FB and remount via TB, landing at the same `/Volumes/CORE` path.
 - As a user, I want auto-switch to happen silently when no files are open (configurable behavior with stability window).
 
-#### Open Questions
-- Should there be a macOS notification (banner/alert) in addition to the menu bar status?
-- Should the app periodically re-check `lsof` and auto-switch once files close, or only on explicit user action?
+#### Resolved Questions
+- **macOS notification**: Deferred to future roadmap. Menu bar indicator is sufficient for V2.
+- **Periodic lsof re-check**: Yes. App re-checks `lsof` each reconcile cycle and auto-switches when files close. User can toggle `lsof_recheck` on/off via CLI (`config set lsof-recheck on|off`) and menu bar UI.
 
 ### JTBD 3: Stable File Paths That Never Break
 **When** I configure applications, scripts, IDE projects, or Finder bookmarks to access network share content, **I want** to use `~/Shares/CORE` as a permanent stable path that always resolves to the mounted share, **so that** nothing I configure ever needs updating.
@@ -259,13 +259,17 @@ Before unmounting for a switch:
 
 ## Config Model (TOML)
 
+Config file location: `~/.mountaineer/config.toml`
+State file location: `~/.mountaineer/state.json`
+
 ```toml
 [global]
 shares_root = "~/Shares"
 check_interval_secs = 2
-auto_failback = true
+auto_failback = false
 auto_failback_stable_secs = 30
 connect_timeout_ms = 800
+lsof_recheck = true
 
 [[shares]]
 name = "CORE"
@@ -299,6 +303,8 @@ Notes:
 - Credentials come from Keychain or existing SMB auth context.
 - User-facing path is always `~/Shares/<name>`.
 - The actual mount path is always `/Volumes/<share_name>`, managed by macOS.
+- All config and state files live under `~/.mountaineer/` (not `~/.config/mountaineer/`).
+- Menu bar UI uses native Swift or lightweight macOS-native framework — NOT GPUI.
 
 ## State Model
 Per-share state:
@@ -416,4 +422,3 @@ cargo build
 ## Future Roadmap
 - Dynamic discovery of all SMB shares (auto-enumerate and offer one-click add).
 - macOS notification center integration for TB recovery alerts.
-- Periodic `lsof` re-check with auto-switch once files close (optional behavior).
