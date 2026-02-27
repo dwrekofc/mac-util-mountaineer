@@ -51,9 +51,14 @@ fn run_cli(command: Command) -> Result<()> {
             log::info!("cli: status --all={} --json={}", all, json);
             cmd_status(all, json)
         }
-        Command::Switch { share, to } => {
-            log::info!("cli: switch --share={} --to={}", share, to.short_label());
-            cmd_switch(&share, to)
+        Command::Switch { share, to, force } => {
+            log::info!(
+                "cli: switch --share={} --to={} --force={}",
+                share,
+                to.short_label(),
+                force
+            );
+            cmd_switch(&share, to, force)
         }
         Command::Verify { target, json } => {
             log::info!(
@@ -68,9 +73,9 @@ fn run_cli(command: Command) -> Result<()> {
             log::info!("cli: mount --all={}", all);
             cmd_mount(all)
         }
-        Command::Unmount { all } => {
-            log::info!("cli: unmount --all={}", all);
-            cmd_unmount(all)
+        Command::Unmount { all, force } => {
+            log::info!("cli: unmount --all={} --force={}", all, force);
+            cmd_unmount(all, force)
         }
         Command::Folders {
             share,
@@ -121,22 +126,24 @@ fn cmd_reconcile(all: bool) -> Result<()> {
 }
 
 fn cmd_monitor(interval: Option<u64>) -> Result<()> {
-    let cfg = config::load()?;
-    ensure_has_shares(&cfg)?;
+    let initial_cfg = config::load()?;
+    ensure_has_shares(&initial_cfg)?;
 
     let interval_secs = interval
-        .or(Some(cfg.global.check_interval_secs))
+        .or(Some(initial_cfg.global.check_interval_secs))
         .unwrap_or(2)
         .max(1);
 
     println!(
         "monitoring {} share(s) every {}s (Ctrl+C to stop)",
-        cfg.shares.len(),
+        initial_cfg.shares.len(),
         interval_secs
     );
 
     let mut state = engine::load_runtime_state().unwrap_or_default();
     loop {
+        // Hot-reload config each cycle per spec 11
+        let cfg = config::load().unwrap_or(initial_cfg.clone());
         let statuses = engine::reconcile_all(&cfg, &mut state);
         print_status_table(&statuses);
         engine::save_runtime_state(&state)?;
@@ -151,7 +158,7 @@ fn cmd_status(all: bool, json: bool) -> Result<()> {
 
     let cfg = config::load()?;
     let mut state = engine::load_runtime_state().unwrap_or_default();
-    let statuses = engine::share_statuses(&cfg, &mut state);
+    let statuses = engine::verify_all(&cfg, &mut state);
     engine::save_runtime_state(&state)?;
 
     if json {
@@ -162,7 +169,7 @@ fn cmd_status(all: bool, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_switch(share_name: &str, to: Backend) -> Result<()> {
+fn cmd_switch(share_name: &str, to: Backend, force: bool) -> Result<()> {
     let cfg = config::load()?;
     ensure_has_shares(&cfg)?;
 
@@ -188,7 +195,7 @@ fn cmd_switch(share_name: &str, to: Backend) -> Result<()> {
         return Ok(());
     }
 
-    match engine::switch_backend_single_mount(&cfg, &mut state, &share, from, to, false) {
+    match engine::switch_backend_single_mount(&cfg, &mut state, &share, from, to, force) {
         engine::SwitchResult::Success => {
             engine::save_runtime_state(&state)?;
             let statuses = engine::verify_all(&cfg, &mut state);
@@ -253,7 +260,7 @@ fn cmd_mount(all: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_unmount(all: bool) -> Result<()> {
+fn cmd_unmount(all: bool, force: bool) -> Result<()> {
     if !all {
         return Err(anyhow!("unmount currently requires --all"));
     }
@@ -262,7 +269,7 @@ fn cmd_unmount(all: bool) -> Result<()> {
     ensure_has_shares(&cfg)?;
 
     let mut state = engine::load_runtime_state().unwrap_or_default();
-    let results = engine::unmount_all(&cfg, &mut state);
+    let results = engine::unmount_all(&cfg, &mut state, force);
     engine::save_runtime_state(&state)?;
 
     println!(
@@ -519,18 +526,24 @@ fn print_status_table(statuses: &[engine::ShareStatus]) {
     }
 
     println!(
-        "{:<16} {:<11} {:<8} {:<8} {:<8} {:<8} STABLE PATH",
-        "SHARE", "ACTIVE", "TB NET", "TB MNT", "FB NET", "FB MNT"
+        "{:<16} {:<11} {:<10} {:<8} {:<8} {:<8} {:<8} STABLE PATH",
+        "SHARE", "ACTIVE", "TB READY", "TB NET", "TB MNT", "FB NET", "FB MNT"
     );
 
     for status in statuses {
+        let tb_ready_label = if status.tb_recovery_pending {
+            "YES"
+        } else {
+            ""
+        };
         println!(
-            "{:<16} {:<11} {:<8} {:<8} {:<8} {:<8} {}",
+            "{:<16} {:<11} {:<10} {:<8} {:<8} {:<8} {:<8} {}",
             status.name,
             status
                 .active_backend
                 .map(|b| b.short_label().to_string())
                 .unwrap_or_else(|| "none".to_string()),
+            tb_ready_label,
             yes_no(status.tb.reachable),
             yes_no(status.tb.ready),
             yes_no(status.fallback.reachable),

@@ -39,7 +39,10 @@ fn generate_plist(home: &str) -> String {
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
-    <false/>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
     <key>StandardOutPath</key>
     <string>{log}</string>
     <key>StandardErrorPath</key>
@@ -95,7 +98,8 @@ pub fn uninstall() -> Result<()> {
     let plist = plist_path()?;
 
     if !plist.exists() {
-        anyhow::bail!("LaunchAgent is not installed (no plist found)");
+        log::info!("LaunchAgent plist not found — already uninstalled");
+        return Ok(());
     }
 
     let plist_str = plist

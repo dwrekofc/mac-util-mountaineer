@@ -38,6 +38,9 @@ pub enum Command {
         share: String,
         #[arg(long)]
         to: Backend,
+        /// Force switch even if files are open on the current mount
+        #[arg(long)]
+        force: bool,
     },
     /// Health and mountpoint checks only
     Verify {
@@ -55,6 +58,9 @@ pub enum Command {
     Unmount {
         #[arg(long)]
         all: bool,
+        /// Force unmount even if files are open
+        #[arg(long)]
+        force: bool,
     },
     /// List folders via stable share path
     Folders {

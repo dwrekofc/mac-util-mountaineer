@@ -3,7 +3,7 @@
 # Mountaineer V2 — Implementation Plan
 
 > Last updated: 2026-02-27
-> Status: Active — P0.0, P0.1, P0.2, P0.3, P0.4, P0.5, P0.6, P0.7, P0.8 complete.
+> Status: Active — P0.0–P0.8 complete; P1.1, P1.2, P1.5, P1.6, P1.7, P1.8, P1.9, P1.11, P3.5 complete.
 
 Items are sorted by priority. Each item references the authoritative spec(s).
 Items marked **[DONE]** are confirmed complete against their spec.
@@ -58,7 +58,7 @@ These must be resolved first. Every other item depends on correct foundations.
 
 ### P1.1 Add `--force` flag to `Switch` and `Unmount` CLI commands
 - **Specs:** 04-tb-recovery, 08-bulk-operations, 10-cli-interface
-- **Status:** [MISSING] — no `force` field on `Switch` or `Unmount` structs in `cli.rs`
+- **Status:** [DONE] — Added `#[arg(long)] force: bool` to `Switch` and `Unmount` CLI commands. `cmd_switch` threads `force` to `switch_backend_single_mount`. `cmd_unmount` threads `force` to `unmount_all`. `unmount_all` now accepts `force: bool` — when true, skips `has_open_handles` check and uses hard `unmount` instead of `unmount_graceful`.
 - **Files:** `crates/mountaineer/src/cli.rs`, `crates/mountaineer/src/main.rs`, `crates/mountaineer/src/engine.rs`
 - **Evidence:**
   - `Command::Switch` at cli.rs:36-41 has `share: String` and `to: Backend` only — no `force`
@@ -73,7 +73,7 @@ These must be resolved first. Every other item depends on correct foundations.
 
 ### P1.2 Add `lsof_recheck` field to `GlobalConfig`
 - **Specs:** 02-config-and-state, 04-tb-recovery, 09-share-status
-- **Status:** [MISSING] — zero occurrences of `lsof_recheck` in source
+- **Status:** [DONE] — Added `lsof_recheck: bool` (default `true`) to `GlobalConfig` with `#[serde(default = "default_lsof_recheck")]`. In reconcile_share auto-failback branch, when `lsof_recheck` is false, passes `force=true` to `switch_backend_single_mount` to skip open-file checks per spec 04.
 - **Files:** `crates/mountaineer/src/config.rs`, `crates/mountaineer/src/engine.rs`
 - **Evidence:**
   - Spec 02 line 9 lists `lsof_recheck` as a required `[global]` field with default `true`
@@ -110,7 +110,7 @@ These must be resolved first. Every other item depends on correct foundations.
 
 ### P1.5 Add `tb_recovery_pending` to `ShareStatus` / JSON output
 - **Specs:** 09-share-status
-- **Status:** [PARTIAL] — tray reads from `RuntimeState` directly; JSON status output omits it
+- **Status:** [DONE] — Added `tb_recovery_pending: bool` field to `ShareStatus`. Populated from `RuntimeState` entry in `reconcile_share` return value. CLI `print_status_table` now shows "TB READY" column with "YES" when `tb_recovery_pending` is true. Included in `--json` output via `Serialize`.
 - **Files:** `crates/mountaineer/src/engine.rs`
 - **Evidence:**
   - `ShareStatus` (engine.rs:44-54) has no `tb_recovery_pending` field
@@ -126,7 +126,7 @@ These must be resolved first. Every other item depends on correct foundations.
 
 ### P1.6 Atomic state persistence (temp-then-rename)
 - **Specs:** 11-background-monitoring, 02-config-and-state
-- **Status:** [PARTIAL] — `save_runtime_state` uses `fs::write` directly
+- **Status:** [DONE] — `save_runtime_state` now writes to `state.json.tmp` then `fs::rename` to `state.json` for atomic persistence. Crash mid-write cannot corrupt the state file.
 - **Files:** `crates/mountaineer/src/engine.rs` (lines 103-113)
 - **Evidence:**
   - `save_runtime_state` at engine.rs:108 calls `fs::write(&path, text)` — non-atomic
@@ -137,7 +137,7 @@ These must be resolved first. Every other item depends on correct foundations.
 
 ### P1.7 Atomic config save
 - **Specs:** 19-tray-quick-actions, 02-config-and-state
-- **Status:** [PARTIAL] — `Config::save()` uses `fs::write` directly
+- **Status:** [DONE] — `Config::save()` now writes to `config.toml.tmp` then `fs::rename` to `config.toml` for atomic persistence.
 - **Files:** `crates/mountaineer/src/config.rs` (line 155)
 - **Evidence:**
   - `save()` at config.rs:155 calls `fs::write(&path, toml)` — non-atomic
@@ -146,7 +146,7 @@ These must be resolved first. Every other item depends on correct foundations.
 
 ### P1.8 Make `uninstall` idempotent
 - **Specs:** 12-launchd-integration
-- **Status:** [PARTIAL] — `launchd::uninstall()` calls `bail!()` if plist not found
+- **Status:** [DONE] — `uninstall()` now returns `Ok(())` with info log when plist not found, instead of `bail!()`.
 - **Files:** `crates/mountaineer/src/launchd.rs` (lines 97-99)
 - **Evidence:**
   - `uninstall()` at launchd.rs:97-99: `if !plist.exists() { anyhow::bail!("LaunchAgent is not installed (no plist found)"); }`
@@ -156,7 +156,7 @@ These must be resolved first. Every other item depends on correct foundations.
 
 ### P1.9 Fix `KeepAlive` plist value
 - **Specs:** 12-launchd-integration
-- **Status:** [PARTIAL] — `<false/>` instead of `SuccessfulExit` dict
+- **Status:** [DONE] — `KeepAlive` in `generate_plist` now emits `<dict><key>SuccessfulExit</key><false/></dict>` per spec 12. macOS will auto-restart on crash but stop on clean exit.
 - **Files:** `crates/mountaineer/src/launchd.rs` (line 42)
 - **Evidence:**
   - `generate_plist` at launchd.rs:41-42 emits `<key>KeepAlive</key>\n<false/>`
@@ -187,7 +187,7 @@ These must be resolved first. Every other item depends on correct foundations.
 
 ### P1.11 Config hot-reload in `cmd_monitor`
 - **Specs:** 11-background-monitoring
-- **Status:** [PARTIAL] — tray loop re-reads config every cycle; `cmd_monitor` reads once
+- **Status:** [DONE] — `cmd_monitor` now calls `config::load()` inside the poll loop (before `reconcile_all`) per spec 11. Falls back to initial config on load error.
 - **Files:** `crates/mountaineer/src/main.rs` (lines 130-152)
 - **Evidence:**
   - `cmd_monitor` at main.rs:131 calls `config::load()` once before the loop
@@ -325,6 +325,7 @@ These must be resolved first. Every other item depends on correct foundations.
 ### P3.5 Consolidate `share_statuses` and `verify_all`
 - **Files:** `crates/mountaineer/src/engine.rs` (lines 607-609, 115)
 - **Evidence:** `share_statuses` (engine.rs:607-609) is literally `verify_all(config, state)` — a 1-line wrapper returning the same result.
+- **Status:** [DONE] — Removed `share_statuses` wrapper function from engine.rs. Updated sole caller in `cmd_status` (main.rs) to call `verify_all` directly.
 - **Work:**
   - Remove `share_statuses` and update all callers to use `verify_all` directly
   - Callers: `cmd_status` in main.rs:161
@@ -536,6 +537,18 @@ Phase 8: Test Coverage (P7.1 -> P7.5)
 ---
 
 ## Change Log
+
+### 2026-02-27 (v7 — P1 spec compliance batch)
+- **P1.1 [DONE]:** Added `--force` flag to `Switch` and `Unmount` CLI commands. `unmount_all` now accepts `force: bool` — skips open-file check and uses hard unmount when true.
+- **P1.2 [DONE]:** Added `lsof_recheck: bool` (default `true`) to `GlobalConfig`. Gates periodic lsof re-check during auto-failback in reconcile cycle per spec 04.
+- **P1.5 [DONE]:** Added `tb_recovery_pending: bool` to `ShareStatus`. CLI status table now shows "TB READY" column. Included in JSON output.
+- **P1.6 [DONE]:** `save_runtime_state` uses atomic temp-then-rename pattern (`.json.tmp` → `.json`).
+- **P1.7 [DONE]:** `Config::save()` uses atomic temp-then-rename pattern (`.toml.tmp` → `.toml`).
+- **P1.8 [DONE]:** `launchd::uninstall()` returns Ok with info log when plist absent (idempotent).
+- **P1.9 [DONE]:** `KeepAlive` in plist now uses `SuccessfulExit = false` dict for crash-restart behavior.
+- **P1.11 [DONE]:** `cmd_monitor` hot-reloads config each cycle inside the poll loop.
+- **P3.5 [DONE]:** Removed `share_statuses` wrapper; caller uses `verify_all` directly.
+- **25 tests pass.** No clippy warnings.
 
 ### 2026-02-27 (v6 — P0 complete)
 - **P0.2 [DONE]:** Removed all dual-mount code. Deleted `single_mount_mode`, `mount_root`, `backend_mount_path`, `sanitize_share_name`, `mount_suffix`, `MountBackends` CLI command, `switch_share()` (dual-mount switch), `choose_desired_backend()` (dual-mount), `mount_backends_for_shares()`. Removed dual-mount branch from `reconcile_share`. Simplified `unmount_all`/`unmount_all_for_share`. Engine dropped ~200 lines.

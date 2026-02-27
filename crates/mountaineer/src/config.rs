@@ -32,6 +32,8 @@ pub struct GlobalConfig {
     pub auto_failback_stable_secs: u64,
     #[serde(default = "default_connect_timeout_ms")]
     pub connect_timeout_ms: u64,
+    #[serde(default = "default_lsof_recheck")]
+    pub lsof_recheck: bool,
 }
 
 impl Default for GlobalConfig {
@@ -42,6 +44,7 @@ impl Default for GlobalConfig {
             auto_failback: default_auto_failback(),
             auto_failback_stable_secs: default_auto_failback_stable_secs(),
             connect_timeout_ms: default_connect_timeout_ms(),
+            lsof_recheck: default_lsof_recheck(),
         }
     }
 }
@@ -94,6 +97,10 @@ fn default_connect_timeout_ms() -> u64 {
     800
 }
 
+fn default_lsof_recheck() -> bool {
+    true
+}
+
 pub fn config_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("/"))
@@ -128,7 +135,13 @@ pub fn save(config: &Config) -> Result<()> {
             .with_context(|| format!("failed creating {}", parent.display()))?;
     }
     let toml = toml::to_string_pretty(config)?;
-    fs::write(&path, toml).with_context(|| format!("failed writing {}", path.display()))?;
+
+    // Atomic write: write to .tmp then rename, so a crash mid-write won't corrupt config.toml
+    let tmp_path = path.with_extension("toml.tmp");
+    fs::write(&tmp_path, &toml)
+        .with_context(|| format!("failed writing temp config {}", tmp_path.display()))?;
+    fs::rename(&tmp_path, &path)
+        .with_context(|| format!("failed renaming temp config to {}", path.display()))?;
     Ok(())
 }
 

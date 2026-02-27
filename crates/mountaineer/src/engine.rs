@@ -47,6 +47,7 @@ pub struct ShareStatus {
     pub stable_path: String,
     pub active_backend: Option<Backend>,
     pub desired_backend: Option<Backend>,
+    pub tb_recovery_pending: bool,
     pub tb: BackendStatus,
     pub fallback: BackendStatus,
     pub last_switch_at: Option<DateTime<Utc>>,
@@ -107,8 +108,13 @@ pub fn save_runtime_state(state: &RuntimeState) -> Result<()> {
             .with_context(|| format!("failed creating {}", parent.display()))?;
     }
     let text = serde_json::to_string_pretty(state)?;
-    fs::write(&path, text)
-        .with_context(|| format!("failed writing runtime state {}", path.display()))?;
+
+    // Atomic write: write to .tmp then rename, so a crash mid-write won't corrupt state.json
+    let tmp_path = path.with_extension("json.tmp");
+    fs::write(&tmp_path, text)
+        .with_context(|| format!("failed writing temp state {}", tmp_path.display()))?;
+    fs::rename(&tmp_path, &path)
+        .with_context(|| format!("failed renaming temp state to {}", path.display()))?;
     Ok(())
 }
 
@@ -297,7 +303,7 @@ pub fn switch_backend_single_mount(
     }
 }
 
-pub fn unmount_all(config: &Config, state: &mut RuntimeState) -> Vec<UnmountResult> {
+pub fn unmount_all(config: &Config, state: &mut RuntimeState, force: bool) -> Vec<UnmountResult> {
     let mut results = Vec::new();
 
     for share in &config.shares {
@@ -316,14 +322,20 @@ pub fn unmount_all(config: &Config, state: &mut RuntimeState) -> Vec<UnmountResu
 
         if !mounted {
             // not mounted, nothing to do
-        } else if has_open_handles(&mount_point) {
+        } else if !force && has_open_handles(&mount_point) {
             result.busy = true;
             result.message = Some("deferred: open files detected".to_string());
         } else {
-            match mount::smb::unmount_graceful(&mount_point) {
+            let unmount_result = if force {
+                mount::smb::unmount(&mount_point)
+            } else {
+                mount::smb::unmount_graceful(&mount_point)
+            };
+            match unmount_result {
                 Ok(()) => {
                     result.unmounted = true;
-                    result.message = Some("unmounted gracefully".to_string());
+                    let method = if force { "forcefully" } else { "gracefully" };
+                    result.message = Some(format!("unmounted {}", method));
                 }
                 Err(err) => {
                     result.message = Some(format!("unmount failed: {}", err));
@@ -531,10 +543,6 @@ fn unmount_all_for_share(
     vec![result]
 }
 
-pub fn share_statuses(config: &Config, state: &mut RuntimeState) -> Vec<ShareStatus> {
-    verify_all(config, state)
-}
-
 fn reconcile_share(
     config: &Config,
     state: &mut RuntimeState,
@@ -678,13 +686,16 @@ fn reconcile_share(
                                 share.name,
                                 stable_for
                             );
+                            // When lsof_recheck is disabled, skip open-file checks
+                            // during auto-failback per spec 04
+                            let skip_lsof = !config.global.lsof_recheck;
                             match switch_backend_single_mount(
                                 config,
                                 state,
                                 share,
                                 Backend::Fallback,
                                 Backend::Tb,
-                                false,
+                                skip_lsof,
                             ) {
                                 SwitchResult::Success => {
                                     // State already updated by switch function
@@ -771,6 +782,7 @@ fn reconcile_share(
         stable_path: stable_path.display().to_string(),
         active_backend: entry.active_backend.or(active_backend),
         desired_backend,
+        tb_recovery_pending: entry.tb_recovery_pending,
         tb: tb.status,
         fallback: fb.status,
         last_switch_at: entry.last_switch_at,
