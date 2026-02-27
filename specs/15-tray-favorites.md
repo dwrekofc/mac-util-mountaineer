@@ -10,7 +10,7 @@ Enables adding and removing managed network shares directly from the menu bar ap
 - Provide a "Remove Favorite" action per share with option to clean up (unmount + remove symlink)
 - Show confirmation before removing a favorite
 - Report dependent aliases that will be affected by removal
-- UI actions call the same engine `add_or_update_share` and `remove_share` functions as the CLI
+- UI actions call the same engine add-share and `remove_share` functions as the CLI (note: add must reject duplicates, not upsert — see spec 06)
 
 ## Constraints
 - The add flow may use a companion panel/window since a tray menu has limited input capability

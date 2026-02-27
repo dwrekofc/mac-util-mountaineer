@@ -36,3 +36,5 @@ Provides named shortcut symlinks to frequently-accessed subfolders inside manage
 
 ## Notes
 - **Atomic symlink creation** `[observed from code]`: `reconcile_alias()` in `engine.rs` uses an atomic write-to-temp-then-rename pattern, consistent with stable path symlink management.
+- **Alias reconcile runs on every reconcile cycle** `[observed from code]`: `reconcile_all()` in `engine.rs` calls `reconcile_aliases(config)` after reconciling shares. This means aliases are validated and repaired every cycle, not just when `alias reconcile` is run manually. This satisfies the "alias validation happens during the regular reconcile cycle" constraint.
+- **Alias duplicate name check works** `[observed from code]`: `add_alias()` checks `existing.name.eq_ignore_ascii_case(&alias.name)` and rejects if found. This correctly enforces unique alias names.

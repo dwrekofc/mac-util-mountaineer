@@ -34,4 +34,5 @@ Manages the lifecycle of managed drives. Favorites are the canonical list of sha
 
 ## Notes
 - **Upsert behavior must change to reject** `[observed from code]`: `add_or_update_share()` in `engine.rs` performs an upsert — if a share with the same name already exists, it updates the entry. Code must be changed to reject duplicates on `add` per spec. Users who need to change connection details should edit `config.toml` directly.
-- **`--cleanup` flag not in CLI struct** `[observed from code]`: The `FavoritesCommand::Remove` variant in `cli.rs` needs verification that it includes a `--cleanup` flag. The engine's `cleanup_removed_share()` exists to perform the cleanup, but the CLI wiring must be confirmed and fixed if missing.
+- **`--cleanup` flag IS in CLI struct** `[observed from code]`: The `FavoritesCommand::Remove` variant in `cli.rs` includes `cleanup: bool` with `#[arg(long)]`. The CLI correctly wires `--cleanup` to `engine::cleanup_removed_share()`. This note supersedes the previous "needs verification" note.
+- **Immediate mount on add works via reconcile** `[observed from code]`: `cmd_favorites` in `main.rs` calls `engine::reconcile_selected` after adding a favorite, which triggers a reconcile cycle that mounts the share. The symlink is created by the reconcile logic, not by a dedicated "create symlink" call in the add flow.

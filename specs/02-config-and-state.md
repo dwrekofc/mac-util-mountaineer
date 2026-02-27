@@ -11,8 +11,9 @@ Defines the configuration model (TOML) and runtime state persistence (JSON) that
 - Support `[[aliases]]` array with per-alias: `name`, `path`, `share`, `target_subpath`
 - Expand `~/` to the user's home directory in all path fields
 - Persist runtime state to `~/.mountaineer/state.json`
-- Runtime state tracks per-share: `active_interface` (tb|fallback), `tb_reachable` (bool), `tb_reachable_since` (timestamp), `fb_reachable` (bool), `mount_alive` (bool), `tb_recovery_pending` (bool), `last_switch_at` (timestamp), `last_error` (optional string)
-- Runtime state also tracks `tb_healthy_since` (timestamp) per share — when TB was first confirmed both reachable AND mounted `[observed from code]`
+- Runtime state persists per-share: `active_backend` (tb|fallback|none), `tb_reachable_since` (timestamp), `tb_healthy_since` (timestamp), `tb_recovery_pending` (bool), `last_switch_at` (timestamp), `last_error` (optional string)
+- `tb_healthy_since` tracks when TB was first confirmed both reachable AND successfully mounted `[observed from code]`
+- `tb_reachable`, `fb_reachable`, and `mount_alive` are computed live each reconcile cycle via TCP probes and `fs::metadata` — they are NOT persisted in state.json `[observed from code]`
 - Support config hot-reload: detect changes to `config.toml` and apply without restart
 - Save runtime state after every state-changing operation
 - Validate config on load: reject missing required fields, duplicate share names, invalid hosts

@@ -23,7 +23,7 @@ Enables Mountaineer to start automatically at login and run as a menu bar access
 2. After install + login (or `launchctl load`), Mountaineer starts automatically
 3. The running app has no Dock icon (menu bar accessory only)
 4. `mountaineer uninstall` removes the plist and stops the agent
-5. Running `uninstall` when no plist exists does not error
+5. Running `uninstall` when no plist exists does not error (currently returns error — must be made idempotent)
 
 ## References
 - `.planning/reqs-001.md` — JTBD 10
@@ -32,3 +32,4 @@ Enables Mountaineer to start automatically at login and run as a menu bar access
 - **Hardcoded binary path is correct** `[observed from code]`: `generate_plist()` in `launchd.rs` hardcodes the binary path to `~/Applications/Mountaineer.app/Contents/MacOS/Mountaineer`. This is the standardized install location per spec.
 - **`KeepAlive` must use `SuccessfulExit = false`** `[observed from code]`: The plist currently sets `KeepAlive = false`. Must be changed to `KeepAlive = { SuccessfulExit = false }` so macOS auto-restarts on crash but not on clean quit.
 - **Modern launchctl API** `[observed from code]`: Code correctly uses `launchctl bootstrap gui/{uid}` and `launchctl bootout gui/{uid}` instead of the deprecated `load`/`unload` commands.
+- **Uninstall not idempotent** `[observed from code]`: `launchd::uninstall()` calls `bail!("LaunchAgent is not installed (no plist found)")` if the plist doesn't exist. Per spec, this should be a no-op instead of an error. The code must be updated to return `Ok(())` when plist is absent.
