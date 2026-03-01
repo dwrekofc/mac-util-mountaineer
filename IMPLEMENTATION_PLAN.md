@@ -18,35 +18,35 @@ These must be resolved first. Every other item depends on correct foundations.
 
 ### P0.0 Fix workspace manifest — project cannot build
 - **Specs:** 01-design-principles
-- **Status:** [DONE] — Root Cargo.toml converted to workspace with `[workspace]`, members, resolver, and `[workspace.dependencies]`. All 13 workspace deps defined with correct versions. Edition set to 2024 via workspace.package. `gpui_platform` added as new workspace dep (with `runtime_shaders` feature). Root main.rs (hello world) removed. Cargo.lock updated.
+- **Status:** [DONE] — Root Cargo.toml converted to workspace with all 13 workspace deps, resolver, edition 2024, and `gpui_platform` with `runtime_shaders` feature. Stale root main.rs removed.
 
 ### P0.1 Wire `mod network;` declaration in main.rs
 - **Specs:** 01-design-principles, 11-background-monitoring
-- **Status:** [DONE] — Added `mod network;` to main.rs. Network module now compiles (monitor.rs and interface.rs). All 22 tests pass including 5 network tests.
+- **Status:** [DONE] — Added `mod network;` to main.rs; network module (monitor.rs, interface.rs) now compiles and all 22 tests pass including 5 network tests.
 
 ### P0.2 Remove dual-mount code and `single_mount_mode` toggle
 - **Specs:** 01-design-principles, 02-config-and-state
-- **Status:** [DONE] — Removed `single_mount_mode`, `mount_root`, `backend_mount_path()`, `sanitize_share_name()`, `mount_suffix()`, `default_mount_root()`, `default_single_mount_mode()` from config.rs. Removed `switch_share()` (dual-mount switch), `choose_desired_backend()` (dual-mount version), `mount_backends_for_shares()` from engine.rs. Removed dual-mount branch from `reconcile_share` (lines 850-893). Removed `single_mount_mode` parameter from `probe_backend`. Simplified `unmount_all` and `unmount_all_for_share` to unmount only the single active mount. Removed `MountBackends` CLI command. Removed `backend_paths_use_suffixes` test. Added 3 new tests for `choose_desired_backend`. Engine dropped ~200 lines of dual-mount branching.
+- **Status:** [DONE] — Removed all dual-mount code from config.rs and engine.rs (~200 lines), including `single_mount_mode`, `backend_mount_path`, `switch_share`, `mount_backends_for_shares`, and the `MountBackends` CLI command.
 
 ### P0.3 Fix volume paths — mount at `/Volumes/<SHARE>`, not backend-specific dirs
 - **Specs:** 01-design-principles, 05-stable-paths
-- **Status:** [DONE] — All mount paths now use `config::volume_mount_path(&share.share_name)` which returns `/Volumes/<SHARE>`. Removed `backend_mount_path` entirely. `detect_active_backend` now relies solely on `RuntimeState.active_backend` (since symlink target is identical for both backends under /Volumes). Stable symlinks point to `/Volumes/<SHARE>`. Mountaineer does NOT create mount point directories under `/Volumes/` — macOS manages this.
+- **Status:** [DONE] — All mount paths now use `config::volume_mount_path(&share.share_name)` returning `/Volumes/<SHARE>`. `detect_active_backend` relies solely on `RuntimeState.active_backend`. macOS manages `/Volumes/` directories.
 
 ### P0.4 Fix config path from `~/Library/Application Support/` to `~/.mountaineer/`
 - **Specs:** 01-design-principles, 02-config-and-state
-- **Status:** [DONE] — Changed `config_path()` and `state_path()` from `dirs::config_dir()` to `dirs::home_dir().join(".mountaineer/")`. Now uses `~/.mountaineer/config.toml` and `~/.mountaineer/state.json` per spec 02.
+- **Status:** [DONE] — Both `config_path()` and `state_path()` now use `dirs::home_dir().join(".mountaineer/")` per spec 02.
 
 ### P0.5 Fix `unmount_all` to preserve stable symlinks
 - **Specs:** 08-bulk-operations, 05-stable-paths
-- **Status:** [DONE] — Removed the `if is_symlink(&stable) { let _ = fs::remove_file(&stable); }` block. Symlinks now persist across unmount per spec 05/08.
+- **Status:** [DONE] — Removed the symlink removal block from `unmount_all`; symlinks now persist across unmount per spec 05/08.
 
 ### P0.6 Fix `cmd_switch` to call `switch_backend_single_mount` instead of `switch_share`
 - **Specs:** 10-cli-interface, 04-tb-recovery
-- **Status:** [DONE] — `cmd_switch` in main.rs now reads `from` backend from RuntimeState, calls `engine::switch_backend_single_mount`, and handles all `SwitchResult` variants with proper error messages.
+- **Status:** [DONE] — `cmd_switch` reads the `from` backend from RuntimeState, calls `engine::switch_backend_single_mount`, and handles all `SwitchResult` variants with proper error messages.
 
 ### P0.7 Fix tray mount-from-none to go through engine, not bypass it
 - **Specs:** 01-design-principles ("All UI actions call the same engine functions as CLI")
-- **Status:** [DONE] — Replaced the direct `mount::smb::mount_share` block in tray.rs `handle_switch` with `engine::reconcile_all()` call. Tray no longer bypasses the engine for initial mounts. Also removed duplicate `set_symlink_atomically` from tray.rs (P3.4 partially addressed).
+- **Status:** [DONE] — Replaced direct `mount::smb::mount_share` call in tray.rs with `engine::reconcile_all()`. Removed duplicate `set_symlink_atomically` from tray.rs.
 
 ### P0.8 Remove stale `watcher.rs`
 - **Specs:** 01-design-principles (V1 pruning)
@@ -58,133 +58,63 @@ These must be resolved first. Every other item depends on correct foundations.
 
 ### P1.1 Add `--force` flag to `Switch` and `Unmount` CLI commands
 - **Specs:** 04-tb-recovery, 08-bulk-operations, 10-cli-interface
-- **Status:** [DONE] — Added `#[arg(long)] force: bool` to `Switch` and `Unmount` CLI commands. `cmd_switch` threads `force` to `switch_backend_single_mount`. `cmd_unmount` threads `force` to `unmount_all`. `unmount_all` now accepts `force: bool` — when true, skips `has_open_handles` check and uses hard `unmount` instead of `unmount_graceful`.
-- **Files:** `crates/mountaineer/src/cli.rs`, `crates/mountaineer/src/main.rs`, `crates/mountaineer/src/engine.rs`
-- **Evidence:**
-  - `Command::Switch` at cli.rs:36-41 has `share: String` and `to: Backend` only — no `force`
-  - `Command::Unmount` at cli.rs:57-60 has `all: bool` only — no `force`
-  - `engine::switch_backend_single_mount` already accepts `force: bool` parameter (engine.rs:238)
-  - `engine::unmount_all` does NOT accept `force` — it always uses `has_open_handles` check
-- **Work:**
-  - Add `#[arg(long)] force: bool` to `Switch` command struct
-  - Add `#[arg(long)] force: bool` to `Unmount` command struct
-  - Thread `force` into `cmd_switch` -> `switch_backend_single_mount` (already accepts `force: bool`)
-  - Thread `force` into `cmd_unmount` -> `unmount_all` (must add force param to skip `has_open_handles`)
+- **Status:** [DONE] — Added `#[arg(long)] force: bool` to `Switch` and `Unmount` CLI commands. `unmount_all` now accepts `force: bool` — when true, skips `has_open_handles` check and uses hard unmount.
 
 ### P1.2 Add `lsof_recheck` field to `GlobalConfig`
 - **Specs:** 02-config-and-state, 04-tb-recovery, 09-share-status
-- **Status:** [DONE] — Added `lsof_recheck: bool` (default `true`) to `GlobalConfig` with `#[serde(default = "default_lsof_recheck")]`. In reconcile_share auto-failback branch, when `lsof_recheck` is false, passes `force=true` to `switch_backend_single_mount` to skip open-file checks per spec 04.
-- **Files:** `crates/mountaineer/src/config.rs`, `crates/mountaineer/src/engine.rs`
-- **Evidence:**
-  - Spec 02 line 9 lists `lsof_recheck` as a required `[global]` field with default `true`
-  - Spec 04 lines 14-15: gates periodic lsof re-check each reconcile cycle
-  - Grep for `lsof_recheck` across entire `crates/` returns zero results
-- **Work:**
-  - Add `lsof_recheck: bool` (default `true`) to `GlobalConfig` with `#[serde(default = "default_lsof_recheck")]`
-  - In `reconcile_share` single-mount TB-recovery branch (engine.rs:758-820): when `auto_failback=true` and `tb_recovery_pending`, gate the `has_open_handles` re-check on `config.global.lsof_recheck`
-  - Include in status output (see P1.5)
+- **Status:** [DONE] — Added `lsof_recheck: bool` (default `true`) to `GlobalConfig`. Gates periodic lsof re-check in the auto-failback branch of `reconcile_share` per spec 04.
 
 ### P1.3 Implement `config set` CLI command
 - **Specs:** 10-cli-interface
-- **Status:** [DONE] — Added `Config` command with `Set` and `Show` subcommands. Supports keys: `lsof-recheck` (on/off), `auto-failback` (on/off), `check-interval` (seconds), `connect-timeout` (ms). Validates inputs (rejects 0 for intervals, parses on/off/true/false/yes/no). Uses atomic config save. `config show` displays all current settings.
+- **Status:** [DONE] — Added `Config` command with `Set` and `Show` subcommands supporting `lsof-recheck`, `auto-failback`, `check-interval`, and `connect-timeout` keys with input validation and atomic config save.
 
 ### P1.4 Make `favorites add` reject duplicates instead of upsert
 - **Specs:** 06-favorites
-- **Status:** [DONE] — Renamed `add_or_update_share` to `add_share`. Returns `Err` if share name already exists (case-insensitive). Removed dead `find_share_mut` function. CLI handler propagates the error to the user.
+- **Status:** [DONE] — Renamed `add_or_update_share` to `add_share`; returns `Err` on duplicate share name (case-insensitive). CLI propagates the error to the user.
 
 ### P1.5 Add `tb_recovery_pending` to `ShareStatus` / JSON output
 - **Specs:** 09-share-status
-- **Status:** [DONE] — Added `tb_recovery_pending: bool` field to `ShareStatus`. Populated from `RuntimeState` entry in `reconcile_share` return value. CLI `print_status_table` now shows "TB READY" column with "YES" when `tb_recovery_pending` is true. Included in `--json` output via `Serialize`.
-- **Files:** `crates/mountaineer/src/engine.rs`
-- **Evidence:**
-  - `ShareStatus` (engine.rs:44-54) has no `tb_recovery_pending` field
-  - `ShareRuntimeState` (engine.rs:30) has `tb_recovery_pending: bool`
-  - Tray reads it from `guard.runtime_state.shares.get(name).map(|e| e.tb_recovery_pending)` at tray.rs:283-285
-  - Spec 09: "TB Ready" indicator when `tb_recovery_pending` is true — must be prominent
-  - `print_status_table` in main.rs:492 does not show TB Ready indicator
-- **Work:**
-  - Add `tb_recovery_pending: bool` field to `ShareStatus` struct
-  - Populate from `RuntimeState` in `reconcile_share` return value
-  - Show "TB Ready" in CLI `print_status_table` output
-  - Add `lsof_recheck: bool` to a global status section in `--json` output
+- **Status:** [DONE] — Added `tb_recovery_pending: bool` to `ShareStatus`, populated from RuntimeState. CLI status table shows "TB READY" column; included in `--json` output via `Serialize`.
 
 ### P1.6 Atomic state persistence (temp-then-rename)
 - **Specs:** 11-background-monitoring, 02-config-and-state
-- **Status:** [DONE] — `save_runtime_state` now writes to `state.json.tmp` then `fs::rename` to `state.json` for atomic persistence. Crash mid-write cannot corrupt the state file.
-- **Files:** `crates/mountaineer/src/engine.rs` (lines 103-113)
-- **Evidence:**
-  - `save_runtime_state` at engine.rs:108 calls `fs::write(&path, text)` — non-atomic
-  - A crash mid-write would corrupt `state.json`
-- **Work:**
-  - Write to `state.json.tmp`, then `fs::rename` to `state.json`
-  - Same pattern as `set_symlink_atomically`
+- **Status:** [DONE] — `save_runtime_state` writes to `state.json.tmp` then renames to `state.json`; crash mid-write cannot corrupt the state file.
 
 ### P1.7 Atomic config save
 - **Specs:** 19-tray-quick-actions, 02-config-and-state
-- **Status:** [DONE] — `Config::save()` now writes to `config.toml.tmp` then `fs::rename` to `config.toml` for atomic persistence.
-- **Files:** `crates/mountaineer/src/config.rs` (line 155)
-- **Evidence:**
-  - `save()` at config.rs:155 calls `fs::write(&path, toml)` — non-atomic
-- **Work:**
-  - Write to `config.toml.tmp`, then `fs::rename` to `config.toml`
+- **Status:** [DONE] — `Config::save()` writes to `config.toml.tmp` then renames to `config.toml`.
 
 ### P1.8 Make `uninstall` idempotent
 - **Specs:** 12-launchd-integration
-- **Status:** [DONE] — `uninstall()` now returns `Ok(())` with info log when plist not found, instead of `bail!()`.
-- **Files:** `crates/mountaineer/src/launchd.rs` (lines 97-99)
-- **Evidence:**
-  - `uninstall()` at launchd.rs:97-99: `if !plist.exists() { anyhow::bail!("LaunchAgent is not installed (no plist found)"); }`
-  - Spec 12: "Uninstall is idempotent — no error if plist does not exist"
-- **Work:**
-  - If plist file doesn't exist, return `Ok(())` with info log instead of error
+- **Status:** [DONE] — `uninstall()` now returns `Ok(())` with info log when plist is absent, instead of bailing with an error.
 
 ### P1.9 Fix `KeepAlive` plist value
 - **Specs:** 12-launchd-integration
-- **Status:** [DONE] — `KeepAlive` in `generate_plist` now emits `<dict><key>SuccessfulExit</key><false/></dict>` per spec 12. macOS will auto-restart on crash but stop on clean exit.
-- **Files:** `crates/mountaineer/src/launchd.rs` (line 42)
-- **Evidence:**
-  - `generate_plist` at launchd.rs:41-42 emits `<key>KeepAlive</key>\n<false/>`
-  - Spec 12 requires `KeepAlive = { SuccessfulExit = false }` so macOS auto-restarts on crash but stops on clean quit
-- **Work:**
-  - Replace `<key>KeepAlive</key>\n<false/>` with:
-    ```xml
-    <key>KeepAlive</key>
-    <dict>
-        <key>SuccessfulExit</key>
-        <false/>
-    </dict>
-    ```
+- **Status:** [DONE] — `generate_plist` now emits `<dict><key>SuccessfulExit</key><false/></dict>` so macOS auto-restarts on crash but stops on clean exit.
 
 ### P1.10 Config validation on load
 - **Specs:** 02-config-and-state
-- **Status:** [DONE] — Added `validate()` function called from `load()`. Rejects: empty share names, empty thunderbolt_host, empty fallback_host, duplicate share names (case-insensitive), empty alias names, duplicate alias names (case-insensitive). 7 new unit tests covering all validation paths plus a TOML roundtrip test. 32 total tests passing.
+- **Status:** [DONE] — Added `validate()` called from `load()`. Rejects empty required fields, duplicate share/alias names (case-insensitive). 7 new unit tests; 32 total tests passing.
 
 ### P1.11 Config hot-reload in `cmd_monitor`
 - **Specs:** 11-background-monitoring
-- **Status:** [DONE] — `cmd_monitor` now calls `config::load()` inside the poll loop (before `reconcile_all`) per spec 11. Falls back to initial config on load error.
-- **Files:** `crates/mountaineer/src/main.rs` (lines 130-152)
-- **Evidence:**
-  - `cmd_monitor` at main.rs:131 calls `config::load()` once before the loop
-  - `tray.rs:74` correctly calls `config::load()` on every loop iteration
-  - Spec 11: "MUST support config hot-reload: re-read config on each cycle"
-- **Work:**
-  - Move `config::load()` call inside the `cmd_monitor` poll loop (before `reconcile_all`)
+- **Status:** [DONE] — `cmd_monitor` now calls `config::load()` inside the poll loop before `reconcile_all`, matching the tray behavior per spec 11.
 
 ### P1.12 Implement failover retry policy
 - **Specs:** 03-failover
-- **Status:** [DONE] — `switch_backend_single_mount` now retries mount once on failure before attempting rollback. Applies to all switch operations (failover and manual switch). Logged at warn level on first failure, error on retry failure.
+- **Status:** [DONE] — `switch_backend_single_mount` retries mount once on failure before attempting rollback, per spec 03.
 
 ### P1.13 Implement stale mount pre-cleanup before remount
 - **Specs:** 03-failover
-- **Status:** [DONE] — `switch_backend_single_mount` now checks for stale mounts (mounted but not alive) at the target path before attempting mount. Force-unmounts stale mounts with warning log. Prevents mount failures from occupied paths.
+- **Status:** [DONE] — `switch_backend_single_mount` detects stale mounts (mounted but not alive) at the target path and force-unmounts them before attempting mount.
 
 ### P1.14 Fix `cmd_mount` to not trigger failover on already-mounted shares
 - **Specs:** 08-bulk-operations
-- **Status:** [DONE] — Added `engine::mount_all()` which calls `reconcile_share` with `attempt_mount=true, auto_switch=false`. `cmd_mount` now uses `mount_all` instead of `reconcile_all`. Already-mounted shares are left untouched — no failover or recovery is triggered.
+- **Status:** [DONE] — Added `engine::mount_all()` that calls `reconcile_share` with `auto_switch=false`; `cmd_mount` now uses this instead of `reconcile_all` so already-mounted shares are untouched.
 
 ### P1.15 Handle errors from `favorites add` reconcile
 - **Specs:** 06-favorites, 10-cli-interface
-- **Status:** [DONE] — Post-add reconcile result is now inspected. Mount failures are reported to stderr as warnings. Config and symlink persist regardless — the command exits successfully since the favorite was saved. Mount will retry on next reconcile cycle.
+- **Status:** [DONE] — Post-add reconcile failures are reported to stderr as warnings. Config and symlink persist regardless; the command exits successfully since the favorite was saved.
 
 ---
 
@@ -192,12 +122,11 @@ These must be resolved first. Every other item depends on correct foundations.
 
 ### P2.1 Wire SCDynamicStore events into V2 reconcile loop
 - **Specs:** 11-background-monitoring
-- **Status:** [DONE] — Both `cmd_monitor` and tray reconcile loop now consume `network::monitor::start()` events. `cmd_monitor` uses `recv_timeout` on the network channel (wakes on network event or timer expiry). Tray uses a bridge thread + `AtomicBool` flag polled at 500ms granularity in the GPUI async loop. Removed `#[allow(dead_code)]` from `network/mod.rs::monitor`.
-- **Files:** `crates/mountaineer/src/main.rs`, `crates/mountaineer/src/tray.rs`, `crates/mountaineer/src/network/mod.rs`
+- **Status:** [DONE] — Both `cmd_monitor` and tray reconcile loop consume `network::monitor::start()` events. `cmd_monitor` uses `recv_timeout` on the network channel; tray uses a bridge thread + `AtomicBool` flag polled at 500ms granularity in the GPUI async loop.
 
 ### P2.2 Add 500ms debounce for network events
 - **Specs:** 11-background-monitoring
-- **Status:** [DONE] — Both `cmd_monitor` and tray bridge thread drain the network event channel for 500ms after the first event before triggering reconcile. Prevents thrashing on rapid interface changes (e.g., wake from sleep).
+- **Status:** [DONE] — Both `cmd_monitor` and tray bridge thread drain the network event channel for 500ms after the first event before triggering reconcile, preventing thrashing on rapid interface changes.
 
 ---
 
@@ -205,45 +134,25 @@ These must be resolved first. Every other item depends on correct foundations.
 
 ### P3.1 Remove or gate `wol.rs`
 - **Specs:** 01-design-principles (WoL not in any spec as a current feature)
-- **Status:** Complete code, zero callers. No MAC address field in `ShareConfig`, no CLI command. No `mod wol;` in main.rs.
-- **Files:** `crates/mountaineer/src/wol.rs`
-- **Evidence:**
-  - `send_wol(mac_address)` is the only public function — grep for `send_wol` across entire crate returns only the definition itself
-  - Has 4 unit tests (`parse_mac_colon_separated`, `parse_mac_hyphen_separated`, `parse_mac_invalid`, `magic_packet_structure`)
-  - Implementation is correct: standard 102-byte WoL magic packet via UDP broadcast to `255.255.255.255:9`
-- **Work:**
-  - **Recommendation:** Keep the file but do not add `mod wol;` to main.rs until a spec is authored
-  - No action needed — file is already excluded from compilation
+- **Status:** [DONE-NO-ACTION] — File is already excluded from compilation (no `mod wol;` in main.rs). No action needed until a WoL spec is authored.
 
 ### P3.2 Evaluate `network/interface.rs`
 - **Specs:** None currently reference it
-- **Status:** Complete, tested, unused. Marked `#[allow(dead_code)]` at module declaration level in `network/mod.rs:1`
-- **Files:** `crates/mountaineer/src/network/interface.rs`, `crates/mountaineer/src/network/mod.rs`
-- **Evidence:**
-  - `enumerate_interfaces()` is the single public function — uses `system_configuration::network_configuration::get_interfaces()` and `nix::ifaddrs::getifaddrs()` to build a list of active network interfaces with type (Ethernet/WiFi) and IP addresses
-  - No callers in any compiled code
-- **Work:**
-  - **Recommendation:** Keep — may be useful for richer status display, auto-detection of Thunderbolt NIC, or future specs
-  - Ensure `#[allow(dead_code)]` stays until it gains callers
+- **Status:** [DONE-NO-ACTION] — Module is already gated with `#[allow(dead_code)]` and has no callers. Keep for future use (richer status display, Thunderbolt NIC auto-detection); no action needed now.
 
 ### P3.3 Clean up unused functions in `discovery.rs`
 - **Specs:** 01-design-principles (prune V1)
-- **Status:** [DONE] — Removed file-level `#![allow(dead_code)]`. Deleted all unused functions: `discover_mounted_shares`, `MountedShare`, all private helpers (`parse_mount_smbfs`, `parse_smbutil_statshares`, `resolve_hostname`, `get_route_interface`, `parse_hardware_ports`), `discover_mac_address`, `is_smb_reachable`, `is_server_reachable`. Kept `is_smb_reachable_with_timeout` (actively used by engine) and `check_share_available` (candidate for probe enhancement, gated with `#[allow(dead_code)]`). Removed 3 tests for deleted functions. 29 tests pass.
+- **Status:** [DONE] — Removed all unused functions and the file-level `#![allow(dead_code)]`. Kept `is_smb_reachable_with_timeout` (active) and `check_share_available` (gated with `#[allow(dead_code)]`). 29 tests pass.
 
 ### P3.4 Deduplicate `set_symlink_atomically`
-- **Status:** [DONE] — Duplicate removed from tray.rs (previous work). Engine version changed from `fn` to `pub(crate) fn` so other modules can use it.
+- **Status:** [DONE] — Duplicate removed from tray.rs; engine version promoted to `pub(crate)`.
 
 ### P3.5 Consolidate `share_statuses` and `verify_all`
-- **Files:** `crates/mountaineer/src/engine.rs` (lines 607-609, 115)
-- **Evidence:** `share_statuses` (engine.rs:607-609) is literally `verify_all(config, state)` — a 1-line wrapper returning the same result.
-- **Status:** [DONE] — Removed `share_statuses` wrapper function from engine.rs. Updated sole caller in `cmd_status` (main.rs) to call `verify_all` directly.
-- **Work:**
-  - Remove `share_statuses` and update all callers to use `verify_all` directly
-  - Callers: `cmd_status` in main.rs:161
+- **Status:** [DONE] — Removed `share_statuses` one-line wrapper; `cmd_status` now calls `verify_all` directly.
 
 ### P3.6 Move alias symlink removal into engine
 - **Specs:** 01-design-principles ("All UI actions call the same engine functions as CLI")
-- **Status:** [DONE] — Moved symlink removal into `engine::remove_alias`. The function now removes the alias from config AND cleans up the symlink on disk. CLI caller no longer does filesystem ops directly.
+- **Status:** [DONE] — `engine::remove_alias` now removes the alias from config and cleans up the disk symlink; the CLI no longer does filesystem ops directly.
 
 ---
 
@@ -256,27 +165,27 @@ These must be resolved first. Every other item depends on correct foundations.
 
 ### P4.1 "Open Logs" quick action
 - **Specs:** 19-tray-quick-actions
-- **Status:** [DONE] — Added "Open Logs" menu item (id `"open-logs"`) that calls `logging::log_path()` and opens the file. Changed `logging::log_path()` from `fn` to `pub(crate) fn`.
+- **Status:** [DONE] — Added "Open Logs" menu item (id `"open-logs"`) that calls `logging::log_path()` and opens the file. Changed `logging::log_path()` to `pub(crate)`.
 
 ### P4.2 `auto_failback` toggle in tray
 - **Specs:** 19-tray-quick-actions
-- **Status:** [DONE] — Added "Auto Failback [on/off]" toggle menu item. On click: loads config, toggles `auto_failback`, saves atomically, rebuilds menu. Uses generic `toggle_config_bool` helper.
+- **Status:** [DONE] — Added "Auto Failback [on/off]" toggle menu item that loads config, toggles `auto_failback`, saves atomically, and rebuilds the menu.
 
 ### P4.3 `lsof_recheck` toggle in tray
 - **Specs:** 19-tray-quick-actions
-- **Status:** [DONE] — Added "Lsof Recheck [on/off]" toggle menu item. Same pattern as P4.2.
+- **Status:** [DONE] — Added "Lsof Recheck [on/off]" toggle menu item using the same `toggle_config_bool` helper pattern as P4.2.
 
 ### P4.4 Visual toggle state indicators
 - **Specs:** 19-tray-quick-actions
-- **Status:** [DONE] — Toggle items show "[on]" or "[off]" labels reflecting current config state. Menu is rebuilt after each toggle. Using text labels rather than `CheckMenuItem` (which the `tray_icon` crate's `Menu` API does not expose directly for cross-platform use).
+- **Status:** [DONE] — Toggle items show "[on]" or "[off]" text labels reflecting current config state; menu is rebuilt after each toggle.
 
 ### P4.5 `last_error` display per share
 - **Specs:** 18-tray-status-display
-- **Status:** [DONE] — Share submenus now show `! <error message>` when `last_error` is non-empty, separated by a divider.
+- **Status:** [DONE] — Share submenus show `! <error message>` when `last_error` is non-empty, separated by a divider.
 
 ### P4.6 Dynamic tray icon reflecting overall health
 - **Specs:** 18-tray-status-display
-- **Status:** [DONE] — Icon changes color based on aggregate health: white (all healthy), yellow/amber (degraded — some shares disconnected, TB recovery pending, or errors), red (all disconnected). Icon updated after every reconcile cycle via `tray.set_icon()`. Initial icon also reflects health. Uses `HealthState` enum and `compute_health()` function.
+- **Status:** [DONE] — Icon changes color based on aggregate health: white (all healthy), yellow/amber (degraded), red (all disconnected). Updated after every reconcile cycle via `HealthState` enum and `compute_health()`.
 
 ### P4.7 Force-switch option on open-files warning
 - **Specs:** 14-tray-tb-recovery
@@ -297,7 +206,7 @@ These must be resolved first. Every other item depends on correct foundations.
 ### P5.1 Favorites management from tray
 - **Specs:** 15-tray-favorites
 - **Status:** [MISSING]
-- **Evidence:** Engine functions exist (`add_or_update_share`, `remove_share`, `cleanup_removed_share`) and are used by CLI. No tray UI wiring.
+- **Evidence:** Engine functions exist (`add_share`, `remove_share`, `cleanup_removed_share`) and are used by CLI. No tray UI wiring.
 - **Work:** "Add Favorite" form (companion window or panel — tray menus have limited input capability), "Remove Favorite" per-share action with confirmation dialog and alias impact reporting. Calls same engine functions as CLI.
 
 ### P5.2 Alias management from tray
@@ -338,53 +247,44 @@ These must be resolved first. Every other item depends on correct foundations.
 
 ### P7.1 Unit tests for config load/save round-trip
 - **Files:** `crates/mountaineer/src/config.rs`
-- **Existing tests:** `backend_paths_use_suffixes` (line 241 — tests dual-mount helper, to be removed with P0.2), `alias_target_joins_subpath` (line 249 — valid)
 - **Work:** Test TOML serialization/deserialization, path expansion, validation, atomic save
 
 ### P7.2 Unit tests for CLI dispatch
 - **Files:** `crates/mountaineer/src/main.rs`, `crates/mountaineer/src/cli.rs`
-- **Existing tests:** None
-- **Work:** Test clap argument parsing for all commands including new `--force` flags and `config set`
+- **Work:** Test clap argument parsing for all commands including `--force` flags and `config set`
 
 ### P7.3 Integration tests for engine reconciliation
 - **Files:** `crates/mountaineer/src/engine.rs`
-- **Existing tests:** None (engine has no `#[cfg(test)]` module)
 - **Work:** Mock mount/unmount/probe functions; test failover and recovery state machines, TB stability window, lsof_recheck gating
 
 ### P7.4 Tests for launchd install/uninstall
 - **Files:** `crates/mountaineer/src/launchd.rs`
-- **Existing tests:** None
 - **Work:** Test plist generation content, KeepAlive dict structure, idempotent uninstall
 
 ### P7.5 Remove or fix system-dependent tests
 - **Files:** `crates/mountaineer/src/discovery.rs`, `crates/mountaineer/src/network/interface.rs`
-- **Evidence:** `network/interface.rs` likely has tests like `enumerate_returns_at_least_one_interface` that depend on dev machine network state
-- **Work:** Either mock system calls or mark with `#[ignore]`
+- **Work:** Mock system calls or mark with `#[ignore]` for tests that depend on dev machine network state
 
 ---
 
 ## Confirmed Working (No Action Needed)
 
-These aspects of the code are confirmed correct against their specs:
-
-- **Failover guard logic** (Spec 03 line 13): `reconcile_share` at engine.rs:722 checks `other_reachable` before calling `switch_backend_single_mount` — TB is NOT unmounted if FB is unreachable. Correct.
-- **Dual-mode logging** (Spec 13): `logging.rs` correctly implements `LoggingMode::Gui` (file-only) and `LoggingMode::Cli` (stderr + file) with `LineWriter` for immediate flush. Log path `~/Library/Logs/mountaineer.log` consistent between `logging::log_path()` and `launchd::generate_plist()`.
-- **Alias lifecycle** (Spec 07): `add_alias` validates share exists (engine.rs:492-494) and rejects duplicate alias names case-insensitively (engine.rs:484-490). `reconcile_aliases` called from `reconcile_all` (engine.rs:131). Atomic symlink creation via `set_symlink_atomically`.
-- **auto_failback defaults to false** (Spec 02): `default_auto_failback()` returns `false` at config.rs:106. Correct.
-- **TB stability window** (Spec 04): `auto_failback_stable_secs` (default 30) is checked at engine.rs:772-773 before auto-failback. Window resets when TB drops (engine.rs:663 clears `tb_reachable_since`). Correct.
-- **Rollback on mount failure** (Spec 04): `switch_backend_single_mount` at engine.rs:321-341 attempts remount of old backend on failure and restores symlink if rollback succeeds.
-- **TB recovery pending clears on TB drop** (Spec 04): engine.rs:664 sets `tb_recovery_pending = false` when TB becomes unreachable. Correct.
-- **shares_root config field** (Spec 02/05): `shares_root_path(config)` reads from `config.global.shares_root` (default `~/Shares`), not hardcoded. Correct.
-- **Tray config hot-reload** (Spec 11): tray.rs:74 calls `config::load()` on every reconcile cycle. Correct.
+- **Failover guard logic** (Spec 03): `reconcile_share` checks `other_reachable` before calling `switch_backend_single_mount` — TB is NOT unmounted if FB is unreachable.
+- **Dual-mode logging** (Spec 13): `logging.rs` correctly implements `LoggingMode::Gui` (file-only) and `LoggingMode::Cli` (stderr + file) with `LineWriter`. Log path consistent between `logging::log_path()` and `launchd::generate_plist()`.
+- **Alias lifecycle** (Spec 07): `add_alias` validates share exists and rejects duplicate alias names case-insensitively. `reconcile_aliases` called from `reconcile_all`. Atomic symlink creation via `set_symlink_atomically`.
+- **auto_failback defaults to false** (Spec 02): `default_auto_failback()` returns `false`. Correct.
+- **TB stability window** (Spec 04): `auto_failback_stable_secs` (default 30) checked before auto-failback. Window resets when TB drops. Correct.
+- **Rollback on mount failure** (Spec 04): `switch_backend_single_mount` attempts remount of old backend on failure and restores symlink if rollback succeeds.
+- **TB recovery pending clears on TB drop** (Spec 04): `tb_recovery_pending = false` set when TB becomes unreachable. Correct.
+- **shares_root config field** (Spec 02/05): `shares_root_path(config)` reads from `config.global.shares_root` (default `~/Shares`), not hardcoded.
+- **Tray config hot-reload** (Spec 11): tray.rs calls `config::load()` on every reconcile cycle. Correct.
 
 ---
 
 ## Environment & Toolchain Notes
 
-These are non-obvious environment facts discovered during implementation. They are not work items but must be known to avoid repeating troubleshooting.
-
-- **gpui API change:** `Application::new()` no longer exists in current gpui. Must use `gpui_platform::application()` which calls `Application::with_platform(current_platform(false))`. `gpui_platform` has been added as a workspace dependency with the `runtime_shaders` feature.
-- **Xcode license blocker:** Building requires either Xcode license accepted or `DEVELOPER_DIR=/Library/Developer/CommandLineTools` env var set. Metal shader compilation needs the `runtime_shaders` feature on `gpui_platform` to avoid requiring the Metal toolchain at build time.
+- **gpui API change:** `Application::new()` no longer exists. Must use `gpui_platform::application()` which calls `Application::with_platform(current_platform(false))`. `gpui_platform` added as workspace dep with `runtime_shaders` feature.
+- **Xcode license blocker:** Building requires either Xcode license accepted or `DEVELOPER_DIR=/Library/Developer/CommandLineTools` env var set. The `runtime_shaders` feature on `gpui_platform` avoids requiring the Metal toolchain at build time.
 - **Root main.rs:** A stale GPUI hello-world `main.rs` existed at the repo root (not in `src/`). Deleted as part of workspace manifest cleanup (P0.0).
 
 ---
@@ -431,96 +331,34 @@ Phase 8: Test Coverage (P7.1 -> P7.5)
 ## Change Log
 
 ### 2026-03-01 (v12 — P4.6 dynamic tray icon)
-- **P4.6 [DONE]:** Dynamic tray icon reflecting overall health. White (healthy), yellow/amber (degraded), red (disconnected). Updated after every reconcile cycle.
-- **29 tests pass.** No clippy warnings.
+- **P4.6 [DONE]:** Dynamic tray icon with white/yellow/red health states. Updated after every reconcile cycle. 29 tests pass.
 
 ### 2026-03-01 (v11 — P4 tray UI enhancements)
-- **P4.1 [DONE]:** Added "Open Logs" tray menu item. Changed `logging::log_path()` to `pub(crate)`.
-- **P4.2 [DONE]:** Added `auto_failback` toggle in tray with atomic config save and menu rebuild.
-- **P4.3 [DONE]:** Added `lsof_recheck` toggle in tray with same pattern.
-- **P4.4 [DONE]:** Toggle items show "[on]"/"[off]" text labels reflecting current config state.
-- **P4.5 [DONE]:** Share submenus show `last_error` when present.
-- **29 tests pass.** No clippy warnings.
+- **P4.1–P4.5 [DONE]:** Open Logs action, auto_failback/lsof_recheck toggles with [on/off] labels, last_error display in share submenus. 29 tests pass.
 
 ### 2026-03-01 (v10 — P3 dead code cleanup)
-- **P3.3 [DONE]:** Cleaned up `discovery.rs` — removed `discover_mounted_shares`, `MountedShare`, all private helpers, `discover_mac_address`, `is_smb_reachable`, `is_server_reachable`. Kept `is_smb_reachable_with_timeout` (used) and `check_share_available` (future probe, gated). Removed 3 dead code tests.
-- **P3.4 [DONE]:** Changed `set_symlink_atomically` from `fn` to `pub(crate) fn` in engine.rs.
-- **P3.6 [DONE]:** Moved alias symlink removal from CLI (`cmd_alias Remove`) into `engine::remove_alias`. Same cleanup now happens whether triggered from CLI or tray UI.
-- **29 tests pass** (3 removed with dead code). No clippy warnings.
+- **P3.3–P3.6 [DONE]:** Cleaned discovery.rs, promoted set_symlink_atomically to pub(crate), moved alias symlink removal into engine. 29 tests pass.
 
 ### 2026-03-01 (v9 — P2 network event integration)
-- **P2.1 [DONE]:** Wired SCDynamicStore network events into both `cmd_monitor` and tray reconcile loops. `cmd_monitor` uses `recv_timeout` on the network channel to wake on network event or timer expiry. Tray uses a bridge thread + `AtomicBool` flag polled at 500ms granularity in the GPUI async loop. Removed `#[allow(dead_code)]` from `network/mod.rs::monitor`.
-- **P2.2 [DONE]:** Added 500ms debounce to both `cmd_monitor` and tray bridge thread. After receiving a network change event, the channel is drained for 500ms before triggering an immediate reconcile. Prevents thrashing on rapid interface changes (e.g., wake from sleep).
-- **32 tests pass.** No clippy warnings. All P2 items now complete.
+- **P2.1–P2.2 [DONE]:** Wired SCDynamicStore events into cmd_monitor and tray; 500ms debounce on both paths. 32 tests pass.
 
 ### 2026-02-27 (v8 — P1 full completion)
-- **P1.3 [DONE]:** Added `config set` CLI command with `Set` and `Show` subcommands. Supports `lsof-recheck`, `auto-failback`, `check-interval`, `connect-timeout` keys. Validates inputs and uses atomic config save.
-- **P1.4 [DONE]:** Renamed `add_or_update_share` to `add_share`. Now rejects duplicate share names (case-insensitive) instead of upserting. Removed dead `find_share_mut` function.
-- **P1.10 [DONE]:** Added `validate()` function called from `load()`. Rejects empty required fields, duplicate share/alias names. 7 new unit tests.
-- **P1.12 [DONE]:** `switch_backend_single_mount` retries mount once on failure before rolling back. Per spec 03.
-- **P1.13 [DONE]:** `switch_backend_single_mount` now detects stale mounts (mounted but not alive) and force-unmounts them before attempting mount.
-- **P1.14 [DONE]:** Added `engine::mount_all()` with `auto_switch=false`. `cmd_mount` uses this instead of `reconcile_all` — leaves already-mounted shares untouched.
-- **P1.15 [DONE]:** `favorites add` now reports mount failures to stderr as warnings. Config persists regardless.
-- **32 tests pass.** No clippy warnings. All P1 items now complete.
+- **P1.3–P1.4, P1.10, P1.12–P1.15 [DONE]:** config set command, duplicate rejection, config validation, failover retry, stale mount pre-cleanup, mount_all, favorites error reporting. 32 tests pass.
 
 ### 2026-02-27 (v7 — P1 spec compliance batch)
-- **P1.1 [DONE]:** Added `--force` flag to `Switch` and `Unmount` CLI commands. `unmount_all` now accepts `force: bool` — skips open-file check and uses hard unmount when true.
-- **P1.2 [DONE]:** Added `lsof_recheck: bool` (default `true`) to `GlobalConfig`. Gates periodic lsof re-check during auto-failback in reconcile cycle per spec 04.
-- **P1.5 [DONE]:** Added `tb_recovery_pending: bool` to `ShareStatus`. CLI status table now shows "TB READY" column. Included in JSON output.
-- **P1.6 [DONE]:** `save_runtime_state` uses atomic temp-then-rename pattern (`.json.tmp` → `.json`).
-- **P1.7 [DONE]:** `Config::save()` uses atomic temp-then-rename pattern (`.toml.tmp` → `.toml`).
-- **P1.8 [DONE]:** `launchd::uninstall()` returns Ok with info log when plist absent (idempotent).
-- **P1.9 [DONE]:** `KeepAlive` in plist now uses `SuccessfulExit = false` dict for crash-restart behavior.
-- **P1.11 [DONE]:** `cmd_monitor` hot-reloads config each cycle inside the poll loop.
-- **P3.5 [DONE]:** Removed `share_statuses` wrapper; caller uses `verify_all` directly.
-- **25 tests pass.** No clippy warnings.
+- **P1.1–P1.2, P1.5–P1.9, P1.11, P3.5 [DONE]:** --force flags, lsof_recheck, tb_recovery_pending status, atomic persistence, idempotent uninstall, KeepAlive fix, config hot-reload, share_statuses consolidation. 25 tests pass.
 
 ### 2026-02-27 (v6 — P0 complete)
-- **P0.2 [DONE]:** Removed all dual-mount code. Deleted `single_mount_mode`, `mount_root`, `backend_mount_path`, `sanitize_share_name`, `mount_suffix`, `MountBackends` CLI command, `switch_share()` (dual-mount switch), `choose_desired_backend()` (dual-mount), `mount_backends_for_shares()`. Removed dual-mount branch from `reconcile_share`. Simplified `unmount_all`/`unmount_all_for_share`. Engine dropped ~200 lines.
-- **P0.3 [DONE]:** All mount paths now use `/Volumes/<SHARE>` via `config::volume_mount_path()`. `detect_active_backend` relies solely on `RuntimeState.active_backend`. Stable symlinks point to `/Volumes/<SHARE>`.
-- **P0.6 [DONE]:** `cmd_switch` now calls `switch_backend_single_mount` with `from` determined from RuntimeState. Handles all `SwitchResult` variants.
-- **P0.7 [DONE]:** Tray `handle_switch` no longer bypasses engine for initial mounts — uses `engine::reconcile_all()`. Removed duplicate `set_symlink_atomically` from tray.rs.
-- **P3.4 updated:** Duplicate `set_symlink_atomically` removed from tray.rs. Only engine.rs copy remains.
-- **25 tests pass** (was 22 before P0.1, now 25 including 3 new `choose_desired_backend` tests).
-- **All P0 items now complete.** Phase 1 (Architectural Foundation) is finished.
+- **P0.2–P0.3, P0.6–P0.7 [DONE]:** Removed dual-mount code, fixed volume paths, fixed cmd_switch, fixed tray engine bypass. 25 tests pass. All P0 items complete.
 
 ### 2026-02-27 (v5 — P0 partial completion)
-- **P0.0 [DONE]:** Workspace manifest fixed. Root `Cargo.toml` converted to workspace; all 13 deps defined in `[workspace.dependencies]`; `gpui_platform` added with `runtime_shaders` feature; stale root `main.rs` removed; `Cargo.lock` updated.
-- **P0.1 [DONE]:** `mod network;` added to `main.rs`. Network module (monitor.rs, interface.rs) now compiles. All 22 tests pass including 5 network tests.
-- **P0.4 [DONE]:** Config path changed from `dirs::config_dir()` (`~/Library/Application Support/`) to `dirs::home_dir().join(".mountaineer/")`. Both `config_path()` and `state_path()` updated.
-- **P0.5 [DONE]:** Symlink removal block removed from `unmount_all`. Stable symlinks now persist across unmount per spec 05/08.
-- **P0.8 [DONE]:** `watcher.rs` deleted.
-- **Added "Environment & Toolchain Notes" section:** Documents gpui API change (`Application::new()` -> `gpui_platform::application()`), Xcode license build blocker, and stale root `main.rs` discovery — to prevent future agents repeating the same troubleshooting.
+- **P0.0–P0.1, P0.4–P0.5, P0.8 [DONE]:** Workspace manifest, network mod, config path, symlink preservation, watcher.rs removal. Added Environment & Toolchain Notes section.
 
 ### 2026-02-27 (v4 — full re-verification)
-- **Re-verified all items** by studying all 19 specs and all 16 source files with 12 parallel subagents
-- **All existing items confirmed accurate** — no corrections needed to v3 findings
-- **All 9 "Confirmed Working" items re-verified** — all remain correct
-- **Added P1.14:** `cmd_mount` delegates to `reconcile_all` with `auto_switch=true`, which can trigger failover/recovery on already-mounted shares. Spec 08 requires "skip shares that are already mounted." Need dedicated mount-only path.
-- **Added P1.15:** `favorites add` silently discards the `Result` from `engine::reconcile_selected` at main.rs:374 (`let _`). Mount errors after adding a favorite are invisible to the user.
-- **Added P3.6:** `cmd_alias remove` in main.rs directly calls `std::fs::remove_file` on the alias symlink instead of delegating to the engine. Violates the engine-as-single-path principle.
-- **Added note to P4.1:** `logging::log_path()` is private; needs visibility change before "Open Logs" tray action can use it.
-- **Updated Summary:** Phase 2 now extends to P1.15, Phase 4 now extends to P3.6.
+- Full re-verification with parallel subagents. Added P1.14, P1.15, P3.6. Updated P4.1 note about log_path visibility. All existing items confirmed accurate.
 
 ### 2026-02-27 (v3 — comprehensive audit)
-- **Deep verification pass** using parallel subagents across all 19 specs and all 16 source files
-- **Added "Confirmed Working" section** — 9 aspects verified correct against specs, documented to prevent future false-positive issues
-- **P0.0 updated:** Confirmed no root `src/main.rs` exists (removed stale reference). Added detail about `chrono` and `objc` being explicit-version deps. Added Cargo.lock evidence that workspace config previously existed.
-- **P0.2 expanded:** Added `sanitize_share_name()`, `unmount_all_for_share()` as items to update. Added exact line numbers for all dual-mount artifacts.
-- **P0.3 expanded:** Added critical finding — `detect_active_backend` (engine.rs:1208-1225) compares symlink target to `backend_mount_path` values; after fix, symlink always points to `/Volumes/<SHARE>` so this function needs rewrite to rely on `RuntimeState.active_backend`. Added note about mount point directory management (`/Volumes/` owned by macOS).
-- **P1.2 expanded:** Added exact location of missing `lsof_recheck` gate (reconcile_share TB-recovery branch at engine.rs:758-820).
-- **P1.13 clarified:** `probe_backend` DOES have stale mount cleanup (engine.rs:1039-1071) during reconciliation probes — but `switch_backend_single_mount` does NOT. Reclassified from [MISSING] to [PARTIAL].
-- **P3.3 expanded:** Full audit of every function in `discovery.rs` with used/unused classification.
-- **P4 note updated:** Clarified that GPUI provides only the app lifecycle/async runtime — actual menu uses `tray_icon` crate. Migration scope is smaller than initially assessed.
-- **All items** received evidence sections with exact file paths and line numbers from source code verification.
+- Added "Confirmed Working" section. Expanded P0.2, P0.3, P1.2, P1.13, P3.3. Clarified P4 GPUI-vs-tray_icon architecture. Added evidence sections with exact line numbers throughout.
 
 ### 2026-02-27 (v2)
-- **Added P0.0:** Workspace manifest is broken -- no `[workspace]` section but `crates/mountaineer/Cargo.toml` uses `.workspace = true` for 13 deps. Build is completely blocked. Promoted to P0.0 (highest priority).
-- **Added P0.1:** `mod network;` not declared in `main.rs` -- entire network module unreachable. Prerequisite for P2.1.
-- **Added P0.7:** Tray bypasses engine for mount-from-none (tray.rs lines 169-200 calls `mount::smb::mount_share` directly). Violates spec 01 principle.
-- **Added P1.12:** Failover retry policy not implemented -- spec 03 requires retry of Fallback once on failure.
-- **Added P1.13:** Stale mount detection/cleanup before remount -- spec 03 requires it, `is_mount_alive` exists but not used as pre-cleanup.
-- **Added P3.5:** `share_statuses` is a 1-line wrapper for `verify_all` -- consolidate.
-- **Renumbered:** Old P0.7 (workspace cleanup) absorbed into new P0.0. Old P0.6 (watcher.rs) renumbered to P0.8. Items reordered to reflect dependency chain.
-- **All file paths** updated from relative names to `crates/mountaineer/src/` paths for clarity.
-- **Evidence sections** added to items where source-level verification was performed.
+- Added P0.0, P0.1, P0.7, P1.12, P1.13, P3.5. Renumbered items to reflect dependency chain. Updated all file paths to absolute crates/ prefixes.
