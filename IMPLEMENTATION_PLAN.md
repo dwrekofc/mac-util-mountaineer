@@ -3,7 +3,7 @@
 # Mountaineer V2 — Implementation Plan
 
 > Last updated: 2026-03-01
-> Status: Active — P0–P4 complete (all items). Remaining: P5.x (tray phase 2), P6.x (migration), P7.x (tests).
+> Status: Active — P0–P4 complete, P5.3 complete, P7.4 complete. Remaining: P5.1–P5.2 (tray forms), P6.x (migration), P7.1–P7.3, P7.5 (tests).
 
 Items are sorted by priority. Each item references the authoritative spec(s).
 Items marked **[DONE]** are confirmed complete against their spec.
@@ -213,9 +213,7 @@ These must be resolved first. Every other item depends on correct foundations.
 
 ### P5.3 Bulk operations from tray
 - **Specs:** 17-tray-bulk-operations
-- **Status:** [MISSING]
-- **Evidence:** Engine functions exist (`reconcile_all`, `unmount_all`) and are used by CLI. No tray UI wiring.
-- **Work:** "Mount All" and "Unmount All" menu items. No force-unmount in tray (CLI only per spec). Show per-share results after operation.
+- **Status:** [DONE] — Added "Mount All" and "Unmount All" menu items. Mount All uses `engine::mount_all` (no failover). Unmount All uses `engine::unmount_all` with `force=false` (no force-unmount in tray per spec). Shows in-progress indicator during operation, logs busy shares, updates icon and statuses after completion.
 
 ---
 
@@ -254,8 +252,7 @@ These must be resolved first. Every other item depends on correct foundations.
 - **Work:** Mock mount/unmount/probe functions; test failover and recovery state machines, TB stability window, lsof_recheck gating
 
 ### P7.4 Tests for launchd install/uninstall
-- **Files:** `crates/mountaineer/src/launchd.rs`
-- **Work:** Test plist generation content, KeepAlive dict structure, idempotent uninstall
+- **Status:** [DONE] — Added 9 unit tests: plist label, executable path, log path, RunAtLoad, KeepAlive dict structure (SuccessfulExit = false), RUST_LOG env, valid XML, is_not_loaded_error known messages, is_not_loaded_error rejects unknowns. 38 total tests passing.
 
 ### P7.5 Remove or fix system-dependent tests
 - **Files:** `crates/mountaineer/src/discovery.rs`, `crates/mountaineer/src/network/interface.rs`
@@ -325,6 +322,10 @@ Phase 8: Test Coverage (P7.1 -> P7.5)
 ---
 
 ## Change Log
+
+### 2026-03-01 (v15 — P5.3 bulk ops, P7.4 launchd tests)
+- **P5.3 [DONE]:** Mount All / Unmount All tray menu items with in-progress indicators and health icon updates.
+- **P7.4 [DONE]:** 9 unit tests for launchd plist generation and error detection. 38 total tests pass.
 
 ### 2026-03-01 (v14 — P4.8 in-progress indicators, P4 complete)
 - **P4.8 [DONE]:** In-progress "Switching..." indicator shown in menu during switch operations. All P4 items now complete.

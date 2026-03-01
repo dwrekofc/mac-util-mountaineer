@@ -179,3 +179,81 @@ fn current_uid() -> Option<u32> {
         .parse::<u32>()
         .ok()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plist_contains_label() {
+        let plist = generate_plist("/Users/testuser");
+        assert!(plist.contains(&format!("<string>{}</string>", LABEL)));
+    }
+
+    #[test]
+    fn plist_contains_executable_path() {
+        let plist = generate_plist("/Users/testuser");
+        assert!(plist
+            .contains("<string>/Users/testuser/Applications/Mountaineer.app/Contents/MacOS/Mountaineer</string>"));
+    }
+
+    #[test]
+    fn plist_contains_log_path() {
+        let plist = generate_plist("/Users/testuser");
+        assert!(plist.contains("<string>/Users/testuser/Library/Logs/mountaineer.log</string>"));
+    }
+
+    #[test]
+    fn plist_has_run_at_load() {
+        let plist = generate_plist("/Users/testuser");
+        assert!(plist.contains("<key>RunAtLoad</key>"));
+        assert!(plist.contains("<true/>"));
+    }
+
+    #[test]
+    fn plist_keepalive_uses_successful_exit_dict() {
+        // Spec 12: KeepAlive = { SuccessfulExit = false } so macOS auto-restarts
+        // on crash but stops on clean exit.
+        let plist = generate_plist("/Users/testuser");
+        assert!(plist.contains("<key>KeepAlive</key>"));
+        assert!(plist.contains("<key>SuccessfulExit</key>"));
+        // SuccessfulExit should be false (not a bare <false/> for KeepAlive)
+        let keepalive_idx = plist.find("<key>KeepAlive</key>").unwrap();
+        let after_keepalive = &plist[keepalive_idx..];
+        // The next element after KeepAlive should be a <dict>, not bare <false/>
+        assert!(after_keepalive.contains("<dict>"));
+        assert!(after_keepalive.contains("<key>SuccessfulExit</key>"));
+    }
+
+    #[test]
+    fn plist_has_rust_log_env() {
+        let plist = generate_plist("/Users/testuser");
+        assert!(plist.contains("<key>RUST_LOG</key>"));
+        assert!(plist.contains("<string>info</string>"));
+    }
+
+    #[test]
+    fn plist_is_valid_xml() {
+        let plist = generate_plist("/Users/testuser");
+        assert!(plist.starts_with("<?xml version=\"1.0\""));
+        assert!(plist.contains("<!DOCTYPE plist"));
+        assert!(plist.contains("<plist version=\"1.0\">"));
+        assert!(plist.trim_end().ends_with("</plist>"));
+    }
+
+    #[test]
+    fn is_not_loaded_error_recognizes_known_messages() {
+        assert!(is_not_loaded_error("Could not find service"));
+        assert!(is_not_loaded_error(
+            "Service cannot load in requested session"
+        ));
+        assert!(is_not_loaded_error("No such process"));
+    }
+
+    #[test]
+    fn is_not_loaded_error_rejects_other_messages() {
+        assert!(!is_not_loaded_error("Permission denied"));
+        assert!(!is_not_loaded_error("Operation not permitted"));
+        assert!(!is_not_loaded_error(""));
+    }
+}

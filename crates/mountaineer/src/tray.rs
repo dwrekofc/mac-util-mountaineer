@@ -162,6 +162,12 @@ fn handle_menu_event(id: &str, state: &Arc<Mutex<TrayState>>, tray: &Arc<Mutex<T
         "open-logs" => {
             let _ = open_log_file();
         }
+        "mount-all" => {
+            handle_mount_all(state, tray);
+        }
+        "unmount-all" => {
+            handle_unmount_all(state, tray);
+        }
         "toggle-auto-failback" => {
             toggle_config_bool(
                 "auto_failback",
@@ -355,6 +361,85 @@ fn handle_switch_with_force(
     }
 }
 
+/// Handle "Mount All" tray action (spec 17). Uses mount_all (no failover).
+fn handle_mount_all(state: &Arc<Mutex<TrayState>>, tray: &Arc<Mutex<TrayIcon>>) {
+    let cfg = match config::load() {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("Failed to load config for mount-all: {}", e);
+            return;
+        }
+    };
+
+    {
+        let mut guard = state.lock().unwrap();
+        guard.in_progress = Some("Mounting all shares...".to_string());
+    }
+    rebuild_menu(state, tray);
+
+    let mut guard = state.lock().unwrap();
+    guard.statuses = engine::mount_all(&cfg, &mut guard.runtime_state);
+    let _ = engine::save_runtime_state(&guard.runtime_state);
+    guard.in_progress = None;
+
+    let health = compute_health(&guard.statuses);
+    drop(guard);
+
+    let new_menu = build_dynamic_menu(state);
+    if let Ok(tray) = tray.lock() {
+        tray.set_menu(Some(Box::new(new_menu)));
+        let _ = tray.set_icon(Some(make_icon_for_health(health)));
+    }
+
+    log::info!("Tray: mount-all complete");
+}
+
+/// Handle "Unmount All" tray action (spec 17). No force-unmount in tray (CLI only).
+fn handle_unmount_all(state: &Arc<Mutex<TrayState>>, tray: &Arc<Mutex<TrayIcon>>) {
+    let cfg = match config::load() {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("Failed to load config for unmount-all: {}", e);
+            return;
+        }
+    };
+
+    {
+        let mut guard = state.lock().unwrap();
+        guard.in_progress = Some("Unmounting all shares...".to_string());
+    }
+    rebuild_menu(state, tray);
+
+    let mut guard = state.lock().unwrap();
+    let results = engine::unmount_all(&cfg, &mut guard.runtime_state, false);
+    let _ = engine::save_runtime_state(&guard.runtime_state);
+    guard.in_progress = None;
+
+    // Log results — busy shares are deferred, not force-unmounted
+    for item in &results {
+        if item.busy {
+            log::warn!(
+                "Tray unmount-all: {} ({}) busy — skipped",
+                item.share,
+                item.backend.short_label()
+            );
+        }
+    }
+
+    // Refresh statuses after unmount
+    guard.statuses = engine::verify_all(&cfg, &mut guard.runtime_state);
+    let health = compute_health(&guard.statuses);
+    drop(guard);
+
+    let new_menu = build_dynamic_menu(state);
+    if let Ok(tray) = tray.lock() {
+        tray.set_menu(Some(Box::new(new_menu)));
+        let _ = tray.set_icon(Some(make_icon_for_health(health)));
+    }
+
+    log::info!("Tray: unmount-all complete");
+}
+
 fn build_dynamic_menu(state: &Arc<Mutex<TrayState>>) -> Menu {
     let menu = Menu::new();
 
@@ -516,6 +601,15 @@ fn build_dynamic_menu(state: &Arc<Mutex<TrayState>>) -> Menu {
         let notice = MenuItem::with_id("notice-tb", "⚡ TB connections available", false, None);
         let _ = menu.append(&notice);
     }
+
+    let _ = menu.append(&PredefinedMenuItem::separator());
+
+    // Bulk operations (spec 17)
+    let mount_all = MenuItem::with_id("mount-all", "Mount All", true, None);
+    let _ = menu.append(&mount_all);
+
+    let unmount_all = MenuItem::with_id("unmount-all", "Unmount All", true, None);
+    let _ = menu.append(&unmount_all);
 
     let _ = menu.append(&PredefinedMenuItem::separator());
 
