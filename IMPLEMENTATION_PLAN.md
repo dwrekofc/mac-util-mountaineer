@@ -3,7 +3,7 @@
 # Mountaineer V2 — Implementation Plan
 
 > Last updated: 2026-03-01
-> Status: Active — P0.0–P0.8, P1.1–P1.15, P2.1–P2.2, P3.5 complete. Remaining: P3.x (cleanup), P4.x–P7.x.
+> Status: Active — P0.0–P0.8, P1.1–P1.15, P2.1–P2.2, P3.3–P3.6 complete. Remaining: P3.1–P3.2 (no action needed), P4.x–P7.x.
 
 Items are sorted by priority. Each item references the authoritative spec(s).
 Items marked **[DONE]** are confirmed complete against their spec.
@@ -228,25 +228,10 @@ These must be resolved first. Every other item depends on correct foundations.
 
 ### P3.3 Clean up unused functions in `discovery.rs`
 - **Specs:** 01-design-principles (prune V1)
-- **Status:** File-level `#![allow(dead_code)]` suppresses all warnings
-- **Files:** `crates/mountaineer/src/discovery.rs`
-- **Evidence — used vs. unused functions:**
-  - **USED:** `is_smb_reachable_with_timeout` (called from engine.rs:1034) — TCP 445 probe with configurable timeout
-  - **UNUSED:** `discover_mounted_shares` (only called from watcher.rs which is not compiled)
-  - **UNUSED:** `discover_mac_address` (zero callers anywhere)
-  - **UNUSED:** `is_smb_reachable` (wrapper for `_with_timeout`, only called from watcher.rs)
-  - **UNUSED:** `check_share_available` (zero callers — candidate for future probe enhancement)
-  - **UNUSED:** `is_server_reachable` (zero callers)
-  - **UNUSED:** All private helpers for `discover_mounted_shares`: `parse_mount_smbfs`, `parse_smbutil_statshares`, `resolve_hostname`, `get_route_interface`, `parse_hardware_ports`
-- **Work:**
-  - Remove `#![allow(dead_code)]` — let compiler identify true dead code
-  - Remove functions with no callers and no realistic path to integration: `discover_mounted_shares` and all its private helpers, `discover_mac_address`, `is_smb_reachable`, `is_server_reachable`
-  - Keep: `is_smb_reachable_with_timeout` (actively used), `check_share_available` (candidate for probe enhancement)
+- **Status:** [DONE] — Removed file-level `#![allow(dead_code)]`. Deleted all unused functions: `discover_mounted_shares`, `MountedShare`, all private helpers (`parse_mount_smbfs`, `parse_smbutil_statshares`, `resolve_hostname`, `get_route_interface`, `parse_hardware_ports`), `discover_mac_address`, `is_smb_reachable`, `is_server_reachable`. Kept `is_smb_reachable_with_timeout` (actively used by engine) and `check_share_available` (candidate for probe enhancement, gated with `#[allow(dead_code)]`). Removed 3 tests for deleted functions. 29 tests pass.
 
 ### P3.4 Deduplicate `set_symlink_atomically`
-- **Files:** `crates/mountaineer/src/engine.rs` (line 1266)
-- **Evidence:** The tray.rs duplicate has been removed. Only the engine.rs version remains. However, it is still private (`fn`), not `pub(crate)`.
-- **Status:** [PARTIAL] — Duplicate removed from tray.rs. Engine version remains private; make `pub(crate)` if other modules need it.
+- **Status:** [DONE] — Duplicate removed from tray.rs (previous work). Engine version changed from `fn` to `pub(crate) fn` so other modules can use it.
 
 ### P3.5 Consolidate `share_statuses` and `verify_all`
 - **Files:** `crates/mountaineer/src/engine.rs` (lines 607-609, 115)
@@ -258,15 +243,7 @@ These must be resolved first. Every other item depends on correct foundations.
 
 ### P3.6 Move alias symlink removal into engine
 - **Specs:** 01-design-principles ("All UI actions call the same engine functions as CLI")
-- **Status:** [PARTIAL] — `cmd_alias remove` directly calls `fs::remove_file` for symlink
-- **Files:** `crates/mountaineer/src/main.rs` (line ~329), `crates/mountaineer/src/engine.rs`
-- **Evidence:**
-  - `cmd_alias remove` in main.rs: after `engine::remove_alias()`, directly calls `std::fs::remove_file` on the alias symlink path
-  - This bypasses the engine for a filesystem operation that should be part of the removal lifecycle
-  - `remove_alias` only removes the alias from the config `Vec`; the symlink deletion is left to the caller
-- **Work:**
-  - Move symlink removal into `engine::remove_alias` (or a new `engine::remove_alias_with_cleanup`)
-  - Ensure the same cleanup happens whether triggered from CLI or tray UI
+- **Status:** [DONE] — Moved symlink removal into `engine::remove_alias`. The function now removes the alias from config AND cleans up the symlink on disk. CLI caller no longer does filesystem ops directly.
 
 ---
 
@@ -463,6 +440,12 @@ Phase 8: Test Coverage (P7.1 -> P7.5)
 ---
 
 ## Change Log
+
+### 2026-03-01 (v10 — P3 dead code cleanup)
+- **P3.3 [DONE]:** Cleaned up `discovery.rs` — removed `discover_mounted_shares`, `MountedShare`, all private helpers, `discover_mac_address`, `is_smb_reachable`, `is_server_reachable`. Kept `is_smb_reachable_with_timeout` (used) and `check_share_available` (future probe, gated). Removed 3 dead code tests.
+- **P3.4 [DONE]:** Changed `set_symlink_atomically` from `fn` to `pub(crate) fn` in engine.rs.
+- **P3.6 [DONE]:** Moved alias symlink removal from CLI (`cmd_alias Remove`) into `engine::remove_alias`. Same cleanup now happens whether triggered from CLI or tray UI.
+- **29 tests pass** (3 removed with dead code). No clippy warnings.
 
 ### 2026-03-01 (v9 — P2 network event integration)
 - **P2.1 [DONE]:** Wired SCDynamicStore network events into both `cmd_monitor` and tray reconcile loops. `cmd_monitor` uses `recv_timeout` on the network channel to wake on network event or timer expiry. Tray uses a bridge thread + `AtomicBool` flag polled at 500ms granularity in the GPUI async loop. Removed `#[allow(dead_code)]` from `network/mod.rs::monitor`.

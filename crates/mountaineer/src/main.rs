@@ -387,11 +387,6 @@ fn cmd_alias(command: AliasCommand) -> Result<()> {
             let alias = engine::remove_alias(&mut cfg, &name)?;
             config::save(&cfg)?;
 
-            let alias_path = config::expand_path(&alias.path);
-            if alias_path.exists() && alias_path.is_symlink() {
-                let _ = std::fs::remove_file(alias_path);
-            }
-
             println!("Removed alias '{}'", alias.name);
             Ok(())
         }

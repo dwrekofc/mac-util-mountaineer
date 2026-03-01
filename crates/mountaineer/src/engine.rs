@@ -501,7 +501,21 @@ pub fn remove_alias(config: &mut Config, name: &str) -> Result<AliasConfig> {
         .iter()
         .position(|alias| alias.name.eq_ignore_ascii_case(name))
         .ok_or_else(|| anyhow!("alias '{}' was not found", name))?;
-    Ok(config.aliases.remove(idx))
+    let alias = config.aliases.remove(idx);
+
+    // Clean up the alias symlink on disk (spec 01: all filesystem ops through engine)
+    let alias_path = config::expand_path(&alias.path);
+    if alias_path.is_symlink()
+        && let Err(e) = std::fs::remove_file(&alias_path)
+    {
+        log::warn!(
+            "Failed to remove alias symlink {}: {}",
+            alias_path.display(),
+            e
+        );
+    }
+
+    Ok(alias)
 }
 
 /// Add a new share to the config. Returns an error if a share with the same name
@@ -1134,7 +1148,7 @@ fn inspect_alias(
     }
 }
 
-fn set_symlink_atomically(target: &Path, link_path: &Path) -> Result<()> {
+pub(crate) fn set_symlink_atomically(target: &Path, link_path: &Path) -> Result<()> {
     if let Some(parent) = link_path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed creating {}", parent.display()))?;
