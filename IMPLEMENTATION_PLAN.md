@@ -3,7 +3,7 @@
 # Mountaineer V2 — Implementation Plan
 
 > Last updated: 2026-03-01
-> Status: Active — P0–P2 complete, P3.3–P3.6 complete, P4.1–P4.7 complete. Remaining: P3.1–P3.2 (no action), P4.8, P5.x–P7.x.
+> Status: Active — P0–P4 complete (all items). Remaining: P5.x (tray phase 2), P6.x (migration), P7.x (tests).
 
 Items are sorted by priority. Each item references the authoritative spec(s).
 Items marked **[DONE]** are confirmed complete against their spec.
@@ -193,9 +193,7 @@ These must be resolved first. Every other item depends on correct foundations.
 
 ### P4.8 In-progress indicators during switch/mount operations
 - **Specs:** 14-tray-tb-recovery, 17-tray-bulk-operations
-- **Status:** [MISSING]
-- **Evidence:** `handle_switch` executes synchronously — menu is only rebuilt after completion (tray.rs:224-230). No intermediate "switching..." state.
-- **Work:** Show temporary "Switching..." or "Mounting..." state in menu during async operations
+- **Status:** [DONE] — Added `in_progress: Option<String>` to `TrayState`. Before a switch operation, the message is set (e.g., "Switching SHARE to TB..."), the menu is rebuilt to show it, then the switch executes. The indicator is cleared after completion. Displayed below the "Mountaineer" title in the menu.
 
 ---
 
@@ -327,6 +325,9 @@ Phase 8: Test Coverage (P7.1 -> P7.5)
 ---
 
 ## Change Log
+
+### 2026-03-01 (v14 — P4.8 in-progress indicators, P4 complete)
+- **P4.8 [DONE]:** In-progress "Switching..." indicator shown in menu during switch operations. All P4 items now complete.
 
 ### 2026-03-01 (v13 — P4.7 force-switch)
 - **P4.7 [DONE]:** Force-switch option on open-files warning. Tracks busy shares in TrayState, shows warning + force-switch menu item, calls switch with `force=true`. 29 tests pass.

@@ -19,6 +19,9 @@ struct TrayState {
     /// Shares that returned BusyOpenFiles on last switch attempt (spec 14).
     /// Cleared on successful switch or next reconcile cycle.
     busy_shares: HashSet<String>,
+    /// In-progress operation message shown at the top of the menu (spec 14/17).
+    /// Set before an operation, cleared after completion.
+    in_progress: Option<String>,
 }
 
 pub fn install(cx: &mut App) {
@@ -32,6 +35,7 @@ pub fn install(cx: &mut App) {
         statuses,
         runtime_state,
         busy_shares: HashSet::new(),
+        in_progress: None,
     }));
 
     let menu = build_dynamic_menu(&state);
@@ -276,16 +280,32 @@ fn handle_switch_with_force(
         }
     };
 
-    // Use the single-mount switch function
     let share_key = share_name.to_ascii_lowercase();
-    match engine::switch_backend_single_mount(
+
+    // Show in-progress indicator in the menu (spec 14/17)
+    guard.in_progress = Some(format!(
+        "Switching {} to {}...",
+        share_name,
+        to.short_label()
+    ));
+    drop(guard);
+    rebuild_menu(state, tray);
+
+    // Re-acquire state for the switch operation
+    let mut guard = state.lock().unwrap();
+    let result = engine::switch_backend_single_mount(
         &cfg,
         &mut guard.runtime_state,
         &share,
         from,
         to,
         force,
-    ) {
+    );
+
+    // Clear in-progress indicator
+    guard.in_progress = None;
+
+    match result {
         SwitchResult::Success => {
             log::info!(
                 "{}: switched {} -> {}",
@@ -340,10 +360,17 @@ fn build_dynamic_menu(state: &Arc<Mutex<TrayState>>) -> Menu {
 
     let title = MenuItem::with_id("title", "Mountaineer", false, None);
     let _ = menu.append(&title);
-    let _ = menu.append(&PredefinedMenuItem::separator());
 
     // Add share status items
     let guard = state.lock().unwrap();
+
+    // Show in-progress indicator if an operation is running (spec 14/17)
+    if let Some(msg) = &guard.in_progress {
+        let progress_item = MenuItem::with_id("in-progress", msg, false, None);
+        let _ = menu.append(&progress_item);
+    }
+
+    let _ = menu.append(&PredefinedMenuItem::separator());
     let has_pending = guard
         .runtime_state
         .shares
