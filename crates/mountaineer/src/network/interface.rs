@@ -140,7 +140,14 @@ impl InterfaceType {
 mod tests {
     use super::*;
 
+    // System-dependent tests: these call enumerate_interfaces() which queries live
+    // macOS network state via SCDynamicStore and getifaddrs. They will fail in
+    // environments without active network interfaces (CI, containers, airplane mode).
+    // Marked #[ignore] so they don't block automated test runs.
+    // Run manually with: cargo test -- --ignored
+
     #[test]
+    #[ignore = "system-dependent: requires active macOS network interfaces"]
     fn enumerate_returns_only_ethernet_and_wifi() {
         let interfaces = enumerate_interfaces();
         for iface in &interfaces {
@@ -155,6 +162,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "system-dependent: requires active macOS network interfaces"]
     fn enumerate_active_interfaces_have_ips() {
         let interfaces = enumerate_interfaces();
         for iface in &interfaces {
@@ -167,8 +175,8 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "system-dependent: requires active macOS network interfaces"]
     fn enumerate_returns_at_least_one_interface() {
-        // On any dev machine, we should have at least one active network interface
         let interfaces = enumerate_interfaces();
         assert!(
             !interfaces.is_empty(),
@@ -177,6 +185,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "system-dependent: requires active macOS network interfaces"]
     fn ethernet_sorted_before_wifi() {
         let interfaces = enumerate_interfaces();
         let mut seen_wifi = false;
@@ -189,6 +198,8 @@ mod tests {
             }
         }
     }
+
+    // --- Pure unit tests (no system dependencies) ---
 
     #[test]
     fn display_format_includes_type() {
@@ -203,5 +214,69 @@ mod tests {
         assert!(s.contains("WiFi"));
         assert!(s.contains("en0"));
         assert!(s.contains("192.168.1.100"));
+    }
+
+    #[test]
+    fn display_format_with_multiple_ips() {
+        let iface = NetworkInterface {
+            name: "en1".into(),
+            interface_type: InterfaceType::Ethernet,
+            display_name: Some("Ethernet".into()),
+            ipv4_addresses: vec!["10.0.0.1".parse().unwrap(), "10.0.0.2".parse().unwrap()],
+            ipv6_addresses: vec![],
+        };
+        let s = format!("{}", iface);
+        assert!(s.contains("10.0.0.1"));
+        assert!(s.contains("10.0.0.2"));
+        assert!(s.contains("Ethernet"));
+    }
+
+    #[test]
+    fn is_active_with_ipv4() {
+        let iface = NetworkInterface {
+            name: "en0".into(),
+            interface_type: InterfaceType::WiFi,
+            display_name: None,
+            ipv4_addresses: vec!["192.168.1.1".parse().unwrap()],
+            ipv6_addresses: vec![],
+        };
+        assert!(iface.is_active());
+    }
+
+    #[test]
+    fn is_active_with_ipv6_only() {
+        let iface = NetworkInterface {
+            name: "en0".into(),
+            interface_type: InterfaceType::WiFi,
+            display_name: None,
+            ipv4_addresses: vec![],
+            ipv6_addresses: vec!["::1".parse().unwrap()],
+        };
+        assert!(iface.is_active());
+    }
+
+    #[test]
+    fn is_not_active_with_no_ips() {
+        let iface = NetworkInterface {
+            name: "en0".into(),
+            interface_type: InterfaceType::WiFi,
+            display_name: None,
+            ipv4_addresses: vec![],
+            ipv6_addresses: vec![],
+        };
+        assert!(!iface.is_active());
+    }
+
+    #[test]
+    fn interface_type_display() {
+        assert_eq!(format!("{}", InterfaceType::Ethernet), "Ethernet");
+        assert_eq!(format!("{}", InterfaceType::WiFi), "WiFi");
+        assert_eq!(format!("{}", InterfaceType::Other), "Other");
+    }
+
+    #[test]
+    fn cmp_priority_ordering() {
+        assert!(InterfaceType::Ethernet.cmp_priority() < InterfaceType::WiFi.cmp_priority());
+        assert!(InterfaceType::WiFi.cmp_priority() < InterfaceType::Other.cmp_priority());
     }
 }

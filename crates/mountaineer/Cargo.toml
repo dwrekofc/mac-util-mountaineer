@@ -25,3 +25,6 @@ gpui.workspace = true
 gpui_platform.workspace = true
 tray-icon.workspace = true
 objc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

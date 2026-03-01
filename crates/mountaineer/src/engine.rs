@@ -1317,4 +1317,438 @@ mod tests {
         let fatal = "mount_smbfs failed (exit 64): permission denied";
         assert!(!is_benign_mount_collision(fatal));
     }
+
+    // --- P7.3: Additional engine reconciliation tests ---
+
+    // Edge case: TB on Fallback with auto_failback OFF — should stay on Fallback
+    // even when TB is reachable and stable. This tests the "manual recovery" flow per spec 04.
+    #[test]
+    fn desired_backend_stays_fallback_when_auto_failback_disabled() {
+        let now = Utc::now();
+        let reachable_since = now - ChronoDuration::seconds(120);
+        let desired = choose_desired_backend(
+            Some(Backend::Fallback),
+            true,
+            true,
+            false, // auto_failback OFF
+            Some(reachable_since),
+            30,
+            now,
+        );
+        assert_eq!(desired, Some(Backend::Fallback));
+    }
+
+    // Edge case: TB on Fallback, TB just came back but not stable long enough yet
+    #[test]
+    fn desired_backend_stays_fallback_during_stability_window() {
+        let now = Utc::now();
+        let reachable_since = now - ChronoDuration::seconds(10); // only 10s, window is 30
+        let desired = choose_desired_backend(
+            Some(Backend::Fallback),
+            true,
+            true,
+            true, // auto_failback ON
+            Some(reachable_since),
+            30,
+            now,
+        );
+        assert_eq!(desired, Some(Backend::Fallback));
+    }
+
+    // Edge case: On Fallback, TB reachable but no stability_since timestamp
+    // This happens when TB was just detected — no timestamp has been set yet
+    #[test]
+    fn desired_backend_stays_fallback_when_no_stability_timestamp() {
+        let now = Utc::now();
+        let desired = choose_desired_backend(
+            Some(Backend::Fallback),
+            true,
+            true,
+            true,
+            None, // no stability timestamp
+            30,
+            now,
+        );
+        assert_eq!(desired, Some(Backend::Fallback));
+    }
+
+    // Edge case: On TB, both reachable — should stay on TB (no unnecessary switch)
+    #[test]
+    fn desired_backend_stays_on_tb_when_both_reachable() {
+        let now = Utc::now();
+        let desired = choose_desired_backend(Some(Backend::Tb), true, true, true, None, 30, now);
+        assert_eq!(desired, Some(Backend::Tb));
+    }
+
+    // Edge case: On Fallback, FB down, TB also down — stays on Fallback (no switch to dead backend)
+    #[test]
+    fn desired_backend_stays_fallback_when_fb_down_tb_also_down() {
+        let now = Utc::now();
+        let desired =
+            choose_desired_backend(Some(Backend::Fallback), false, false, true, None, 30, now);
+        assert_eq!(desired, Some(Backend::Fallback));
+    }
+
+    // Edge case: On Fallback, FB down but TB up — emergency switch to TB
+    #[test]
+    fn desired_backend_switches_to_tb_when_fb_down() {
+        let now = Utc::now();
+        let desired = choose_desired_backend(
+            Some(Backend::Fallback),
+            true,
+            false,
+            false, // even with auto_failback OFF
+            None,
+            30,
+            now,
+        );
+        assert_eq!(desired, Some(Backend::Tb));
+    }
+
+    // Edge case: Stability window exactly at boundary (edge case for >= comparison)
+    #[test]
+    fn desired_backend_failbacks_at_exact_stability_boundary() {
+        let now = Utc::now();
+        let reachable_since = now - ChronoDuration::seconds(30); // exactly 30s
+        let desired = choose_desired_backend(
+            Some(Backend::Fallback),
+            true,
+            true,
+            true,
+            Some(reachable_since),
+            30,
+            now,
+        );
+        assert_eq!(desired, Some(Backend::Tb));
+    }
+
+    // Benign mount collision: test the -5014 error code pattern
+    #[test]
+    fn benign_mount_collision_type_5014() {
+        let msg = "file exists an error of type -5014 occurred";
+        assert!(is_benign_mount_collision(msg));
+    }
+
+    // Benign mount collision: test the execution error pattern
+    #[test]
+    fn benign_mount_collision_execution_error() {
+        let msg = "File Exists execution error something";
+        assert!(is_benign_mount_collision(msg));
+    }
+
+    // Non-benign: "file exists" alone without the qualifying context
+    #[test]
+    fn not_benign_when_file_exists_alone() {
+        let msg = "file exists";
+        assert!(!is_benign_mount_collision(msg));
+    }
+
+    // Non-benign: empty string
+    #[test]
+    fn not_benign_empty_string() {
+        assert!(!is_benign_mount_collision(""));
+    }
+
+    // --- State entry helper ---
+
+    #[test]
+    fn state_entry_mut_inserts_default_for_new_share() {
+        let mut state = RuntimeState::default();
+        let entry = state_entry_mut(&mut state, "CORE");
+        assert!(entry.active_backend.is_none());
+        assert!(!entry.tb_recovery_pending);
+        assert!(entry.last_error.is_none());
+    }
+
+    #[test]
+    fn state_entry_mut_returns_existing_entry() {
+        let mut state = RuntimeState::default();
+        state.shares.insert(
+            "core".to_string(),
+            ShareRuntimeState {
+                active_backend: Some(Backend::Tb),
+                tb_recovery_pending: true,
+                ..Default::default()
+            },
+        );
+        let entry = state_entry_mut(&mut state, "CORE");
+        assert_eq!(entry.active_backend, Some(Backend::Tb));
+        assert!(entry.tb_recovery_pending);
+    }
+
+    // --- Detect active backend ---
+
+    #[test]
+    fn detect_active_backend_from_state() {
+        let mut state = RuntimeState::default();
+        state.shares.insert(
+            "core".to_string(),
+            ShareRuntimeState {
+                active_backend: Some(Backend::Fallback),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            detect_active_backend(&state, "CORE"),
+            Some(Backend::Fallback)
+        );
+        assert_eq!(
+            detect_active_backend(&state, "core"),
+            Some(Backend::Fallback)
+        );
+        assert_eq!(detect_active_backend(&state, "MISSING"), None);
+    }
+
+    // --- Backend host resolution ---
+
+    #[test]
+    fn backend_host_returns_correct_host() {
+        let share = ShareConfig {
+            name: "CORE".to_string(),
+            username: "user".to_string(),
+            thunderbolt_host: "10.0.0.1".to_string(),
+            fallback_host: "192.168.1.1".to_string(),
+            share_name: "CORE".to_string(),
+        };
+        assert_eq!(backend_host(&share, Backend::Tb), "10.0.0.1");
+        assert_eq!(backend_host(&share, Backend::Fallback), "192.168.1.1");
+    }
+
+    // --- Backend ready helper ---
+
+    #[test]
+    fn backend_ready_checks_correct_backend() {
+        let tb = BackendStatus {
+            host: "10.0.0.1".to_string(),
+            mount_point: "/Volumes/CORE".to_string(),
+            reachable: true,
+            mounted: true,
+            alive: true,
+            ready: true,
+            last_error: None,
+        };
+        let fb = BackendStatus {
+            host: "192.168.1.1".to_string(),
+            mount_point: "/Volumes/CORE".to_string(),
+            reachable: false,
+            mounted: false,
+            alive: false,
+            ready: false,
+            last_error: None,
+        };
+        assert!(backend_ready(Backend::Tb, &tb, &fb));
+        assert!(!backend_ready(Backend::Fallback, &tb, &fb));
+    }
+
+    // --- Select shares ---
+
+    #[test]
+    fn select_shares_empty_returns_all() {
+        let config = Config {
+            shares: vec![
+                ShareConfig {
+                    name: "CORE".to_string(),
+                    username: "u".to_string(),
+                    thunderbolt_host: "10.0.0.1".to_string(),
+                    fallback_host: "192.168.1.1".to_string(),
+                    share_name: "CORE".to_string(),
+                },
+                ShareConfig {
+                    name: "DATA".to_string(),
+                    username: "u".to_string(),
+                    thunderbolt_host: "10.0.0.2".to_string(),
+                    fallback_host: "192.168.1.2".to_string(),
+                    share_name: "DATA".to_string(),
+                },
+            ],
+            ..Config::default()
+        };
+        let selected = select_shares(&config, &[]).unwrap();
+        assert_eq!(selected.len(), 2);
+    }
+
+    #[test]
+    fn select_shares_filters_by_name() {
+        let config = Config {
+            shares: vec![
+                ShareConfig {
+                    name: "CORE".to_string(),
+                    username: "u".to_string(),
+                    thunderbolt_host: "10.0.0.1".to_string(),
+                    fallback_host: "192.168.1.1".to_string(),
+                    share_name: "CORE".to_string(),
+                },
+                ShareConfig {
+                    name: "DATA".to_string(),
+                    username: "u".to_string(),
+                    thunderbolt_host: "10.0.0.2".to_string(),
+                    fallback_host: "192.168.1.2".to_string(),
+                    share_name: "DATA".to_string(),
+                },
+            ],
+            ..Config::default()
+        };
+        let selected = select_shares(&config, &["CORE".to_string()]).unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].name, "CORE");
+    }
+
+    #[test]
+    fn select_shares_rejects_unknown() {
+        let config = Config::default();
+        let err = select_shares(&config, &["MISSING".to_string()]).unwrap_err();
+        assert!(err.to_string().contains("not configured"));
+    }
+
+    // --- Runtime state JSON round-trip ---
+
+    #[test]
+    fn runtime_state_json_roundtrip() {
+        let mut state = RuntimeState::default();
+        state.shares.insert(
+            "core".to_string(),
+            ShareRuntimeState {
+                active_backend: Some(Backend::Tb),
+                tb_recovery_pending: false,
+                last_error: Some("test error".to_string()),
+                ..Default::default()
+            },
+        );
+        let json = serde_json::to_string_pretty(&state).unwrap();
+        let parsed: RuntimeState = serde_json::from_str(&json).unwrap();
+        let entry = parsed.shares.get("core").unwrap();
+        assert_eq!(entry.active_backend, Some(Backend::Tb));
+        assert!(!entry.tb_recovery_pending);
+        assert_eq!(entry.last_error.as_deref(), Some("test error"));
+    }
+
+    #[test]
+    fn runtime_state_empty_json_roundtrip() {
+        let state = RuntimeState::default();
+        let json = serde_json::to_string(&state).unwrap();
+        let parsed: RuntimeState = serde_json::from_str(&json).unwrap();
+        assert!(parsed.shares.is_empty());
+    }
+
+    // --- Symlink-related pure functions ---
+
+    #[test]
+    fn set_symlink_atomically_creates_symlink_in_tempdir() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target_dir");
+        std::fs::create_dir(&target).unwrap();
+        let link = dir.path().join("my_link");
+
+        set_symlink_atomically(&target, &link).unwrap();
+        assert!(link.is_symlink());
+        let resolved = std::fs::read_link(&link).unwrap();
+        assert_eq!(resolved, target);
+    }
+
+    #[test]
+    fn set_symlink_atomically_replaces_existing_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let target1 = dir.path().join("target1");
+        let target2 = dir.path().join("target2");
+        std::fs::create_dir(&target1).unwrap();
+        std::fs::create_dir(&target2).unwrap();
+        let link = dir.path().join("my_link");
+
+        set_symlink_atomically(&target1, &link).unwrap();
+        assert_eq!(std::fs::read_link(&link).unwrap(), target1);
+
+        set_symlink_atomically(&target2, &link).unwrap();
+        assert_eq!(std::fs::read_link(&link).unwrap(), target2);
+    }
+
+    #[test]
+    fn set_symlink_atomically_rejects_non_symlink_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target");
+        std::fs::create_dir(&target).unwrap();
+        let link = dir.path().join("regular_file");
+        std::fs::write(&link, "not a symlink").unwrap();
+
+        let err = set_symlink_atomically(&target, &link).unwrap_err();
+        assert!(err.to_string().contains("not a symlink"));
+    }
+
+    #[test]
+    fn set_symlink_atomically_creates_parent_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target");
+        std::fs::create_dir(&target).unwrap();
+        let link = dir.path().join("nested").join("deep").join("link");
+
+        set_symlink_atomically(&target, &link).unwrap();
+        assert!(link.is_symlink());
+    }
+
+    // --- resolve_symlink_target ---
+
+    #[test]
+    fn resolve_symlink_target_returns_absolute() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("real");
+        std::fs::create_dir(&target).unwrap();
+        let link = dir.path().join("sym");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let resolved = resolve_symlink_target(&link).unwrap();
+        assert_eq!(resolved, target);
+    }
+
+    #[test]
+    fn resolve_symlink_target_none_for_regular_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("regular");
+        std::fs::write(&file, "content").unwrap();
+
+        assert!(resolve_symlink_target(&file).is_none());
+    }
+
+    // --- is_symlink ---
+
+    #[test]
+    fn is_symlink_true_for_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target");
+        std::fs::write(&target, "").unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(is_symlink(&link));
+    }
+
+    #[test]
+    fn is_symlink_false_for_regular_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("regular");
+        std::fs::write(&file, "").unwrap();
+        assert!(!is_symlink(&file));
+    }
+
+    #[test]
+    fn is_symlink_false_for_nonexistent() {
+        assert!(!is_symlink(Path::new(
+            "/nonexistent/path/that/does/not/exist"
+        )));
+    }
+
+    // --- path_eq ---
+
+    #[test]
+    fn path_eq_identical_paths() {
+        assert!(path_eq(
+            Path::new("/Volumes/CORE"),
+            Path::new("/Volumes/CORE")
+        ));
+    }
+
+    #[test]
+    fn path_eq_different_paths() {
+        assert!(!path_eq(
+            Path::new("/Volumes/CORE"),
+            Path::new("/Volumes/DATA")
+        ));
+    }
 }
