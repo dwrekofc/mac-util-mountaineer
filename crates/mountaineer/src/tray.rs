@@ -8,6 +8,7 @@ use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
 use crate::config::{self, Backend};
 use crate::engine::{self, RuntimeState, ShareStatus, SwitchResult};
+use crate::logging;
 use crate::network;
 
 /// Shared state for the tray menu, updated by the background reconciliation loop.
@@ -141,6 +142,25 @@ fn handle_menu_event(id: &str, state: &Arc<Mutex<TrayState>>, tray: &Arc<Mutex<T
     match id {
         "open-shares" => {
             let _ = open_shares_folder();
+        }
+        "open-logs" => {
+            let _ = open_log_file();
+        }
+        "toggle-auto-failback" => {
+            toggle_config_bool(
+                "auto_failback",
+                |g| g.auto_failback,
+                |g, v| g.auto_failback = v,
+            );
+            rebuild_menu(state, tray);
+        }
+        "toggle-lsof-recheck" => {
+            toggle_config_bool(
+                "lsof_recheck",
+                |g| g.lsof_recheck,
+                |g, v| g.lsof_recheck = v,
+            );
+            rebuild_menu(state, tray);
         }
         "quit" => {
             // Handled in the event loop
@@ -377,6 +397,15 @@ fn build_dynamic_menu(state: &Arc<Mutex<TrayState>>) -> Menu {
             MenuItem::with_id(format!("info-fb-{}", status.name), &fb_status, false, None);
         let _ = submenu.append(&fb_item);
 
+        // Show last error if present (spec 18)
+        if let Some(error) = &status.last_error {
+            let _ = submenu.append(&PredefinedMenuItem::separator());
+            let err_label = format!("! {}", error);
+            let err_item =
+                MenuItem::with_id(format!("info-err-{}", status.name), &err_label, false, None);
+            let _ = submenu.append(&err_item);
+        }
+
         let _ = menu.append(&submenu);
     }
     drop(guard);
@@ -392,6 +421,31 @@ fn build_dynamic_menu(state: &Arc<Mutex<TrayState>>) -> Menu {
 
     let open_shares = MenuItem::with_id("open-shares", "Open Shares Folder", true, None);
     let _ = menu.append(&open_shares);
+
+    let open_logs = MenuItem::with_id("open-logs", "Open Logs", true, None);
+    let _ = menu.append(&open_logs);
+
+    let _ = menu.append(&PredefinedMenuItem::separator());
+
+    // Config toggles with visual state indicators (spec 19)
+    let cfg = config::load().unwrap_or_default();
+    let failback_label = format!(
+        "Auto Failback [{}]",
+        if cfg.global.auto_failback {
+            "on"
+        } else {
+            "off"
+        }
+    );
+    let failback_toggle = MenuItem::with_id("toggle-auto-failback", &failback_label, true, None);
+    let _ = menu.append(&failback_toggle);
+
+    let lsof_label = format!(
+        "Lsof Recheck [{}]",
+        if cfg.global.lsof_recheck { "on" } else { "off" }
+    );
+    let lsof_toggle = MenuItem::with_id("toggle-lsof-recheck", &lsof_label, true, None);
+    let _ = menu.append(&lsof_toggle);
 
     let _ = menu.append(&PredefinedMenuItem::separator());
 
@@ -409,6 +463,46 @@ fn open_shares_folder() -> anyhow::Result<()> {
         .arg(shares_root)
         .spawn()?;
     Ok(())
+}
+
+fn open_log_file() -> anyhow::Result<()> {
+    let path = logging::log_path()?;
+    std::process::Command::new("open").arg(path).spawn()?;
+    Ok(())
+}
+
+/// Toggle a boolean config field, save atomically, and log the change (spec 19).
+fn toggle_config_bool(
+    name: &str,
+    get: fn(&config::GlobalConfig) -> bool,
+    set: fn(&mut config::GlobalConfig, bool),
+) {
+    match config::load() {
+        Ok(mut cfg) => {
+            let new_value = !get(&cfg.global);
+            set(&mut cfg.global, new_value);
+            if let Err(e) = config::save(&cfg) {
+                log::error!("Failed to save config after toggling {}: {}", name, e);
+                return;
+            }
+            log::info!(
+                "Tray: toggled {} to {}",
+                name,
+                if new_value { "on" } else { "off" }
+            );
+        }
+        Err(e) => {
+            log::error!("Failed to load config for toggle {}: {}", name, e);
+        }
+    }
+}
+
+/// Rebuild the tray menu from current state.
+fn rebuild_menu(state: &Arc<Mutex<TrayState>>, tray: &Arc<Mutex<TrayIcon>>) {
+    let new_menu = build_dynamic_menu(state);
+    if let Ok(tray) = tray.lock() {
+        tray.set_menu(Some(Box::new(new_menu)));
+    }
 }
 
 fn make_icon() -> Icon {

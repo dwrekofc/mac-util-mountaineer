@@ -54,7 +54,7 @@ fn open_log_file() -> anyhow::Result<std::fs::File> {
         .map_err(|e| anyhow::anyhow!("failed to open log file {}: {}", path.display(), e))
 }
 
-fn log_path() -> anyhow::Result<PathBuf> {
+pub(crate) fn log_path() -> anyhow::Result<PathBuf> {
     let home = dirs::home_dir().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,

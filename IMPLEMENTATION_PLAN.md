@@ -3,7 +3,7 @@
 # Mountaineer V2 — Implementation Plan
 
 > Last updated: 2026-03-01
-> Status: Active — P0.0–P0.8, P1.1–P1.15, P2.1–P2.2, P3.3–P3.6 complete. Remaining: P3.1–P3.2 (no action needed), P4.x–P7.x.
+> Status: Active — P0–P2 complete, P3.3–P3.6 complete, P4.1–P4.5 complete. Remaining: P3.1–P3.2 (no action), P4.6–P4.8, P5.x–P7.x.
 
 Items are sorted by priority. Each item references the authoritative spec(s).
 Items marked **[DONE]** are confirmed complete against their spec.
@@ -256,32 +256,23 @@ These must be resolved first. Every other item depends on correct foundations.
 
 ### P4.1 "Open Logs" quick action
 - **Specs:** 19-tray-quick-actions
-- **Status:** [MISSING]
-- **Evidence:** "Open Shares Folder" exists (tray.rs:382-390, id `"open-shares"`) but no "Open Logs"
-- **Work:** Add menu item (id `"open-logs"`) that runs `open ~/Library/Logs/mountaineer.log` (path from `logging::log_path()`)
-- **Prerequisite:** `logging::log_path()` is currently private (`logging.rs:57`); must be changed to `pub(crate)` or `pub`
+- **Status:** [DONE] — Added "Open Logs" menu item (id `"open-logs"`) that calls `logging::log_path()` and opens the file. Changed `logging::log_path()` from `fn` to `pub(crate) fn`.
 
 ### P4.2 `auto_failback` toggle in tray
 - **Specs:** 19-tray-quick-actions
-- **Status:** [MISSING]
-- **Evidence:** No toggle items exist in tray menu — only action items and info labels
-- **Work:** Checkmark menu item; on click: load config -> toggle `auto_failback` -> atomic save -> rebuild menu
+- **Status:** [DONE] — Added "Auto Failback [on/off]" toggle menu item. On click: loads config, toggles `auto_failback`, saves atomically, rebuilds menu. Uses generic `toggle_config_bool` helper.
 
 ### P4.3 `lsof_recheck` toggle in tray
 - **Specs:** 19-tray-quick-actions
-- **Status:** [MISSING]
-- **Depends on:** P1.2 (field must exist in config)
+- **Status:** [DONE] — Added "Lsof Recheck [on/off]" toggle menu item. Same pattern as P4.2.
 
 ### P4.4 Visual toggle state indicators
 - **Specs:** 19-tray-quick-actions
-- **Status:** [MISSING]
-- **Work:** Show checkmark or on/off label next to toggle items (currently no `CheckMenuItem` used anywhere)
+- **Status:** [DONE] — Toggle items show "[on]" or "[off]" labels reflecting current config state. Menu is rebuilt after each toggle. Using text labels rather than `CheckMenuItem` (which the `tray_icon` crate's `Menu` API does not expose directly for cross-platform use).
 
 ### P4.5 `last_error` display per share
 - **Specs:** 18-tray-status-display
-- **Status:** [MISSING]
-- **Evidence:** `BackendStatus.last_error` and `ShareStatus.last_error` exist; `print_status_table` in main.rs:517-520 shows `last_error` in CLI output; tray `build_dynamic_menu` does not display it
-- **Work:** Show `last_error` string in share submenu when non-empty
+- **Status:** [DONE] — Share submenus now show `! <error message>` when `last_error` is non-empty, separated by a divider.
 
 ### P4.6 Dynamic tray icon reflecting overall health
 - **Specs:** 18-tray-status-display
@@ -440,6 +431,14 @@ Phase 8: Test Coverage (P7.1 -> P7.5)
 ---
 
 ## Change Log
+
+### 2026-03-01 (v11 — P4 tray UI enhancements)
+- **P4.1 [DONE]:** Added "Open Logs" tray menu item. Changed `logging::log_path()` to `pub(crate)`.
+- **P4.2 [DONE]:** Added `auto_failback` toggle in tray with atomic config save and menu rebuild.
+- **P4.3 [DONE]:** Added `lsof_recheck` toggle in tray with same pattern.
+- **P4.4 [DONE]:** Toggle items show "[on]"/"[off]" text labels reflecting current config state.
+- **P4.5 [DONE]:** Share submenus show `last_error` when present.
+- **29 tests pass.** No clippy warnings.
 
 ### 2026-03-01 (v10 — P3 dead code cleanup)
 - **P3.3 [DONE]:** Cleaned up `discovery.rs` — removed `discover_mounted_shares`, `MountedShare`, all private helpers, `discover_mac_address`, `is_smb_reachable`, `is_server_reachable`. Kept `is_smb_reachable_with_timeout` (used) and `check_share_available` (future probe, gated). Removed 3 dead code tests.
