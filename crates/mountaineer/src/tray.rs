@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -15,6 +16,9 @@ use crate::network;
 struct TrayState {
     statuses: Vec<ShareStatus>,
     runtime_state: RuntimeState,
+    /// Shares that returned BusyOpenFiles on last switch attempt (spec 14).
+    /// Cleared on successful switch or next reconcile cycle.
+    busy_shares: HashSet<String>,
 }
 
 pub fn install(cx: &mut App) {
@@ -27,6 +31,7 @@ pub fn install(cx: &mut App) {
     let state = Arc::new(Mutex::new(TrayState {
         statuses,
         runtime_state,
+        busy_shares: HashSet::new(),
     }));
 
     let menu = build_dynamic_menu(&state);
@@ -110,6 +115,8 @@ pub fn install(cx: &mut App) {
                 let mut guard = state_for_reconcile.lock().unwrap();
                 guard.statuses = engine::reconcile_all(&cfg, &mut guard.runtime_state);
                 let _ = engine::save_runtime_state(&guard.runtime_state);
+                // Clear busy_shares — reconcile may have resolved the open-files condition
+                guard.busy_shares.clear();
             }
 
             // Rebuild menu and update icon with current health (spec 18)
@@ -170,6 +177,27 @@ fn handle_menu_event(id: &str, state: &Arc<Mutex<TrayState>>, tray: &Arc<Mutex<T
         "quit" => {
             // Handled in the event loop
         }
+        _ if id.starts_with("force-switch-") => {
+            // Parse: force-switch-{share}-{backend}
+            if let Some(rest) = id.strip_prefix("force-switch-") {
+                let parts: Vec<&str> = rest.rsplitn(2, '-').collect();
+                if parts.len() == 2 {
+                    let backend_str = parts[0];
+                    let share_name = parts[1];
+                    let to = match backend_str {
+                        "tb" => Backend::Tb,
+                        "fallback" | "fb" => Backend::Fallback,
+                        _ => return,
+                    };
+                    log::info!(
+                        "Tray: force-switching {} to {}",
+                        share_name,
+                        to.short_label()
+                    );
+                    handle_switch_with_force(share_name, to, true, state, tray);
+                }
+            }
+        }
         _ if id.starts_with("switch-") => {
             // Parse: switch-{share}-{backend}
             let parts: Vec<&str> = id
@@ -188,16 +216,17 @@ fn handle_menu_event(id: &str, state: &Arc<Mutex<TrayState>>, tray: &Arc<Mutex<T
                 };
 
                 log::info!("Tray: switching {} to {}", share_name, to.short_label());
-                handle_switch(share_name, to, state, tray);
+                handle_switch_with_force(share_name, to, false, state, tray);
             }
         }
         _ => {}
     }
 }
 
-fn handle_switch(
+fn handle_switch_with_force(
     share_name: &str,
     to: Backend,
+    force: bool,
     state: &Arc<Mutex<TrayState>>,
     tray: &Arc<Mutex<TrayIcon>>,
 ) {
@@ -248,13 +277,14 @@ fn handle_switch(
     };
 
     // Use the single-mount switch function
+    let share_key = share_name.to_ascii_lowercase();
     match engine::switch_backend_single_mount(
         &cfg,
         &mut guard.runtime_state,
         &share,
         from,
         to,
-        false,
+        force,
     ) {
         SwitchResult::Success => {
             log::info!(
@@ -263,6 +293,7 @@ fn handle_switch(
                 from.short_label(),
                 to.short_label()
             );
+            guard.busy_shares.remove(&share_key);
             let _ = engine::save_runtime_state(&guard.runtime_state);
 
             // Refresh statuses
@@ -270,19 +301,25 @@ fn handle_switch(
             let mut guard = state.lock().unwrap();
             guard.statuses = engine::verify_all(&cfg, &mut guard.runtime_state);
 
-            // Update menu
+            // Update menu and icon
+            let health = compute_health(&guard.statuses);
             drop(guard);
             let new_menu = build_dynamic_menu(state);
             if let Ok(tray) = tray.lock() {
                 tray.set_menu(Some(Box::new(new_menu)));
+                let _ = tray.set_icon(Some(make_icon_for_health(health)));
             }
         }
         SwitchResult::BusyOpenFiles => {
             log::warn!(
-                "{}: cannot switch - open files detected. Close files and try again.",
-                share_name
+                "{}: cannot switch - open files detected (force={}). Use Force Switch or close files.",
+                share_name,
+                force
             );
-            // Could show a notification here
+            // Track this share as busy so the menu can show "Force Switch" (spec 14)
+            guard.busy_shares.insert(share_key);
+            drop(guard);
+            rebuild_menu(state, tray);
         }
         SwitchResult::UnmountFailed(e) => {
             log::error!("{}: unmount failed: {}", share_name, e);
@@ -354,6 +391,10 @@ fn build_dynamic_menu(state: &Arc<Mutex<TrayState>>) -> Menu {
             Backend::Fallback => status.fallback.reachable,
         };
 
+        let is_busy = guard
+            .busy_shares
+            .contains(&status.name.to_ascii_lowercase());
+
         if other_reachable {
             let switch_label = if tb_pending && other_backend == Backend::Tb {
                 "⚡ Switch to TB (available)".to_string()
@@ -367,6 +408,33 @@ fn build_dynamic_menu(state: &Arc<Mutex<TrayState>>) -> Menu {
                 None,
             );
             let _ = submenu.append(&switch_item);
+
+            // Show force-switch option when open files blocked the last switch (spec 14)
+            if is_busy {
+                let busy_label = MenuItem::with_id(
+                    format!("info-busy-{}", status.name),
+                    "⚠ Open files blocking switch",
+                    false,
+                    None,
+                );
+                let _ = submenu.append(&busy_label);
+
+                let force_label = format!(
+                    "Force Switch to {} (may lose data!)",
+                    other_backend.short_label()
+                );
+                let force_item = MenuItem::with_id(
+                    format!(
+                        "force-switch-{}-{}",
+                        status.name,
+                        other_backend.short_label()
+                    ),
+                    &force_label,
+                    true,
+                    None,
+                );
+                let _ = submenu.append(&force_item);
+            }
         }
 
         // Show backend status

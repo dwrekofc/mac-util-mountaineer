@@ -3,7 +3,7 @@
 # Mountaineer V2 — Implementation Plan
 
 > Last updated: 2026-03-01
-> Status: Active — P0–P2 complete, P3.3–P3.6 complete, P4.1–P4.6 complete. Remaining: P3.1–P3.2 (no action), P4.7–P4.8, P5.x–P7.x.
+> Status: Active — P0–P2 complete, P3.3–P3.6 complete, P4.1–P4.7 complete. Remaining: P3.1–P3.2 (no action), P4.8, P5.x–P7.x.
 
 Items are sorted by priority. Each item references the authoritative spec(s).
 Items marked **[DONE]** are confirmed complete against their spec.
@@ -189,9 +189,7 @@ These must be resolved first. Every other item depends on correct foundations.
 
 ### P4.7 Force-switch option on open-files warning
 - **Specs:** 14-tray-tb-recovery
-- **Status:** [MISSING] — `BusyOpenFiles` case only logs a warning
-- **Evidence:** `handle_switch` at tray.rs:233-238 handles `SwitchResult::BusyOpenFiles` with `log::warn!` only — no UI feedback, no force-switch option, `force` parameter hardcoded `false` at tray.rs:210
-- **Work:** Show "Force Switch to TB" menu item with file count when `BusyOpenFiles` returned. Must also show warning text about open files.
+- **Status:** [DONE] — When `BusyOpenFiles` is returned, the share is tracked as "busy" and the menu shows a warning ("Open files blocking switch") plus a "Force Switch to {backend} (may lose data!)" option. Force-switch calls `switch_backend_single_mount` with `force=true`. Busy state is cleared on successful switch or on next reconcile cycle.
 
 ### P4.8 In-progress indicators during switch/mount operations
 - **Specs:** 14-tray-tb-recovery, 17-tray-bulk-operations
@@ -329,6 +327,9 @@ Phase 8: Test Coverage (P7.1 -> P7.5)
 ---
 
 ## Change Log
+
+### 2026-03-01 (v13 — P4.7 force-switch)
+- **P4.7 [DONE]:** Force-switch option on open-files warning. Tracks busy shares in TrayState, shows warning + force-switch menu item, calls switch with `force=true`. 29 tests pass.
 
 ### 2026-03-01 (v12 — P4.6 dynamic tray icon)
 - **P4.6 [DONE]:** Dynamic tray icon with white/yellow/red health states. Updated after every reconcile cycle. 29 tests pass.
