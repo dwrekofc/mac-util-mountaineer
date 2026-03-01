@@ -22,6 +22,7 @@ pub fn install(cx: &mut App) {
     let cfg = config::load().unwrap_or_default();
     let mut runtime_state = engine::load_runtime_state().unwrap_or_default();
     let statuses = engine::verify_all(&cfg, &mut runtime_state);
+    let initial_health = compute_health(&statuses);
 
     let state = Arc::new(Mutex::new(TrayState {
         statuses,
@@ -29,11 +30,10 @@ pub fn install(cx: &mut App) {
     }));
 
     let menu = build_dynamic_menu(&state);
-
     let tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
         .with_tooltip("Mountaineer")
-        .with_icon(make_icon())
+        .with_icon(make_icon_for_health(initial_health))
         .build()
         .expect("failed to build tray icon");
 
@@ -112,10 +112,15 @@ pub fn install(cx: &mut App) {
                 let _ = engine::save_runtime_state(&guard.runtime_state);
             }
 
-            // Rebuild menu with updated state
+            // Rebuild menu and update icon with current health (spec 18)
+            let health = {
+                let guard = state_for_reconcile.lock().unwrap();
+                compute_health(&guard.statuses)
+            };
             let new_menu = build_dynamic_menu(&state_for_reconcile);
             if let Ok(tray) = tray_for_reconcile.lock() {
                 tray.set_menu(Some(Box::new(new_menu)));
+                let _ = tray.set_icon(Some(make_icon_for_health(health)));
             }
 
             // Poll at 500ms granularity so network events trigger reconcile within
@@ -505,7 +510,62 @@ fn rebuild_menu(state: &Arc<Mutex<TrayState>>, tray: &Arc<Mutex<TrayIcon>>) {
     }
 }
 
-fn make_icon() -> Icon {
+/// Overall health state for the tray icon (spec 18).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HealthState {
+    /// All shares connected — white icon
+    Healthy,
+    /// Some shares degraded or TB recovery pending — yellow icon
+    Degraded,
+    /// No shares connected or all disconnected — red icon
+    Disconnected,
+}
+
+/// Determine overall health from share statuses.
+fn compute_health(statuses: &[ShareStatus]) -> HealthState {
+    if statuses.is_empty() {
+        return HealthState::Healthy;
+    }
+
+    let mut any_connected = false;
+    let mut all_connected = true;
+    let mut any_degraded = false;
+
+    for status in statuses {
+        let connected = match status.active_backend {
+            Some(Backend::Tb) => status.tb.ready,
+            Some(Backend::Fallback) => status.fallback.ready,
+            None => false,
+        };
+        if connected {
+            any_connected = true;
+        } else {
+            all_connected = false;
+        }
+        if status.tb_recovery_pending || status.last_error.is_some() {
+            any_degraded = true;
+        }
+    }
+
+    if !any_connected {
+        HealthState::Disconnected
+    } else if !all_connected || any_degraded {
+        HealthState::Degraded
+    } else {
+        HealthState::Healthy
+    }
+}
+
+fn make_icon_for_health(health: HealthState) -> Icon {
+    let (r, g, b) = match health {
+        HealthState::Healthy => (255u8, 255u8, 255u8), // white
+        HealthState::Degraded => (255u8, 200u8, 50u8), // yellow/amber
+        HealthState::Disconnected => (255u8, 80u8, 80u8), // red
+    };
+    make_icon_with_color(r, g, b)
+}
+
+fn make_icon_with_color(r: u8, g: u8, b: u8) -> Icon {
     let size = 16u32;
     let mut rgba = vec![0u8; (size * size * 4) as usize];
 
@@ -518,9 +578,9 @@ fn make_icon() -> Icon {
 
         for x in left..=right {
             let idx = ((y * size + x) * 4) as usize;
-            rgba[idx] = 255;
-            rgba[idx + 1] = 255;
-            rgba[idx + 2] = 255;
+            rgba[idx] = r;
+            rgba[idx + 1] = g;
+            rgba[idx + 2] = b;
             rgba[idx + 3] = 255;
         }
     }

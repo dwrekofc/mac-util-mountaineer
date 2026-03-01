@@ -3,7 +3,7 @@
 # Mountaineer V2 — Implementation Plan
 
 > Last updated: 2026-03-01
-> Status: Active — P0–P2 complete, P3.3–P3.6 complete, P4.1–P4.5 complete. Remaining: P3.1–P3.2 (no action), P4.6–P4.8, P5.x–P7.x.
+> Status: Active — P0–P2 complete, P3.3–P3.6 complete, P4.1–P4.6 complete. Remaining: P3.1–P3.2 (no action), P4.7–P4.8, P5.x–P7.x.
 
 Items are sorted by priority. Each item references the authoritative spec(s).
 Items marked **[DONE]** are confirmed complete against their spec.
@@ -276,9 +276,7 @@ These must be resolved first. Every other item depends on correct foundations.
 
 ### P4.6 Dynamic tray icon reflecting overall health
 - **Specs:** 18-tray-status-display
-- **Status:** [PARTIAL] — currently static white triangle
-- **Evidence:** `make_icon()` (tray.rs:430-451) generates a fixed 16x16 white triangle bitmap; `tray_icon.set_icon()` is never called after initialization
-- **Work:** Icon variants: all-healthy (normal), some-degraded (warning), all-disconnected (error). Call `tray.set_icon(...)` after each reconcile cycle based on aggregate status.
+- **Status:** [DONE] — Icon changes color based on aggregate health: white (all healthy), yellow/amber (degraded — some shares disconnected, TB recovery pending, or errors), red (all disconnected). Icon updated after every reconcile cycle via `tray.set_icon()`. Initial icon also reflects health. Uses `HealthState` enum and `compute_health()` function.
 
 ### P4.7 Force-switch option on open-files warning
 - **Specs:** 14-tray-tb-recovery
@@ -431,6 +429,10 @@ Phase 8: Test Coverage (P7.1 -> P7.5)
 ---
 
 ## Change Log
+
+### 2026-03-01 (v12 — P4.6 dynamic tray icon)
+- **P4.6 [DONE]:** Dynamic tray icon reflecting overall health. White (healthy), yellow/amber (degraded), red (disconnected). Updated after every reconcile cycle.
+- **29 tests pass.** No clippy warnings.
 
 ### 2026-03-01 (v11 — P4 tray UI enhancements)
 - **P4.1 [DONE]:** Added "Open Logs" tray menu item. Changed `logging::log_path()` to `pub(crate)`.
