@@ -3,7 +3,7 @@
 # Mountaineer V2 — Implementation Plan
 
 > Last updated: 2026-03-01
-> Status: Active — P0–P4 complete, P5.3 complete, P7 complete. Remaining: P5.1–P5.2 (tray forms), P6.x (migration).
+> Status: Active — P0–P4 complete, P5.1 complete, P5.3 complete, P7 complete. Remaining: P5.2 (tray alias management), P6.x (migration).
 
 Items are sorted by priority. Each item references the authoritative spec(s).
 Items marked **[DONE]** are confirmed complete against their spec.
@@ -201,9 +201,7 @@ These must be resolved first. Every other item depends on correct foundations.
 
 ### P5.1 Favorites management from tray
 - **Specs:** 15-tray-favorites
-- **Status:** [MISSING]
-- **Evidence:** Engine functions exist (`add_share`, `remove_share`, `cleanup_removed_share`) and are used by CLI. No tray UI wiring.
-- **Work:** "Add Favorite" form (companion window or panel — tray menus have limited input capability), "Remove Favorite" per-share action with confirmation dialog and alias impact reporting. Calls same engine functions as CLI.
+- **Status:** [DONE] — Added "Add Favorite..." menu item that shows a native macOS NSAlert form dialog (via `objc` crate) with 5 labeled text fields (name, TB host, fallback host, username, remote share). On submit, calls `engine::add_share` + `config::save` + `engine::reconcile_all` to mount immediately. Added "Remove Favorite..." per-share submenu item that shows a confirmation NSAlert with cleanup checkbox and affected-alias count. On confirm, calls `engine::remove_share` + `config::save` + optional `engine::cleanup_removed_share`. All dialogs isolated in new `dialogs.rs` module using native AppKit via `objc` crate (no new dependencies). Error dialogs shown for validation failures.
 
 ### P5.2 Alias management from tray
 - **Specs:** 16-tray-aliases
@@ -318,6 +316,10 @@ Phase 8: Test Coverage (P7.1 -> P7.5) [ALL DONE]
 ---
 
 ## Change Log
+
+### 2026-03-01 (v17 — P5.1 tray favorites management)
+- **P5.1 [DONE]:** Native macOS dialog-based favorites management from tray. New `dialogs.rs` module using `objc` crate for NSAlert with accessory views. "Add Favorite..." shows a 5-field form (share name, TB host, fallback host, username, remote share). "Remove Favorite..." per-share with confirmation dialog, cleanup checkbox, and alias impact count. All actions call the same engine functions as CLI. No new dependencies.
+- **Total: 123 tests passing, 4 ignored (system-dependent). 0 failures. Clippy clean.**
 
 ### 2026-03-01 (v16 — P7 test coverage complete)
 - **P7.1 [DONE]:** 19 new config tests covering filesystem round-trip, atomic save, default values, partial TOML parsing, path expansion, find_share, and validation edge cases.

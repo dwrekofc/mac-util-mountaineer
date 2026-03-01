@@ -7,7 +7,8 @@ use gpui::*;
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
-use crate::config::{self, Backend};
+use crate::config::{self, Backend, ShareConfig};
+use crate::dialogs;
 use crate::engine::{self, RuntimeState, ShareStatus, SwitchResult};
 use crate::logging;
 use crate::network;
@@ -184,8 +185,16 @@ fn handle_menu_event(id: &str, state: &Arc<Mutex<TrayState>>, tray: &Arc<Mutex<T
             );
             rebuild_menu(state, tray);
         }
+        "add-favorite" => {
+            handle_add_favorite(state, tray);
+        }
         "quit" => {
             // Handled in the event loop
+        }
+        _ if id.starts_with("remove-favorite-") => {
+            if let Some(share_name) = id.strip_prefix("remove-favorite-") {
+                handle_remove_favorite(share_name, state, tray);
+            }
         }
         _ if id.starts_with("force-switch-") => {
             // Parse: force-switch-{share}-{backend}
@@ -440,6 +449,175 @@ fn handle_unmount_all(state: &Arc<Mutex<TrayState>>, tray: &Arc<Mutex<TrayIcon>>
     log::info!("Tray: unmount-all complete");
 }
 
+/// Handle "Add Favorite" tray action (spec 15).
+/// Shows a native macOS form dialog, then calls engine::add_share and triggers mount.
+fn handle_add_favorite(state: &Arc<Mutex<TrayState>>, tray: &Arc<Mutex<TrayIcon>>) {
+    // Show native dialog — blocks until user dismisses
+    let input = match dialogs::show_add_favorite_dialog() {
+        Some(input) => input,
+        None => return, // User cancelled
+    };
+
+    // Validate required fields before calling engine
+    if input.share_name.trim().is_empty()
+        || input.tb_host.trim().is_empty()
+        || input.fallback_host.trim().is_empty()
+        || input.username.trim().is_empty()
+    {
+        dialogs::show_error_dialog(
+            "Missing Fields",
+            "Share name, Thunderbolt host, Fallback host, and username are required.",
+        );
+        return;
+    }
+
+    let share_name = input.share_name.trim().to_string();
+    let share_cfg = ShareConfig {
+        name: share_name.clone(),
+        username: input.username.trim().to_string(),
+        thunderbolt_host: input.tb_host.trim().to_string(),
+        fallback_host: input.fallback_host.trim().to_string(),
+        share_name: input
+            .remote_share
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| share_name.clone()),
+    };
+
+    // Load config, add share, save — same code path as CLI favorites add
+    let mut cfg = match config::load() {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("Failed to load config for add-favorite: {}", e);
+            dialogs::show_error_dialog("Error", &format!("Failed to load config: {}", e));
+            return;
+        }
+    };
+
+    if let Err(e) = engine::add_share(&mut cfg, share_cfg) {
+        dialogs::show_error_dialog("Cannot Add Favorite", &e.to_string());
+        return;
+    }
+
+    if let Err(e) = config::save(&cfg) {
+        log::error!("Failed to save config after add-favorite: {}", e);
+        dialogs::show_error_dialog("Error", &format!("Failed to save config: {}", e));
+        return;
+    }
+
+    log::info!("Tray: added favorite '{}'", share_name);
+
+    // Show in-progress indicator and trigger immediate reconcile to mount
+    {
+        let mut guard = state.lock().unwrap();
+        guard.in_progress = Some(format!("Mounting {}...", share_name));
+    }
+    rebuild_menu(state, tray);
+
+    {
+        let mut guard = state.lock().unwrap();
+        guard.statuses = engine::reconcile_all(&cfg, &mut guard.runtime_state);
+        let _ = engine::save_runtime_state(&guard.runtime_state);
+        guard.in_progress = None;
+    }
+
+    // Rebuild menu and update icon
+    let health = {
+        let guard = state.lock().unwrap();
+        compute_health(&guard.statuses)
+    };
+    let new_menu = build_dynamic_menu(state);
+    if let Ok(tray) = tray.lock() {
+        tray.set_menu(Some(Box::new(new_menu)));
+        let _ = tray.set_icon(Some(make_icon_for_health(health)));
+    }
+}
+
+/// Handle "Remove Favorite" tray action (spec 15).
+/// Shows a confirmation dialog with cleanup option and alias impact reporting.
+fn handle_remove_favorite(
+    share_name: &str,
+    state: &Arc<Mutex<TrayState>>,
+    tray: &Arc<Mutex<TrayIcon>>,
+) {
+    let cfg = match config::load() {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("Failed to load config for remove-favorite: {}", e);
+            return;
+        }
+    };
+
+    // Count affected aliases for the confirmation dialog (spec 15: report dependent aliases)
+    let affected_aliases = cfg
+        .aliases
+        .iter()
+        .filter(|a| a.share.eq_ignore_ascii_case(share_name))
+        .count();
+
+    // Show confirmation dialog
+    let choice = dialogs::show_remove_favorite_dialog(share_name, affected_aliases);
+    if !choice.confirmed {
+        return;
+    }
+
+    // Remove share — same code path as CLI favorites remove
+    let mut cfg = cfg;
+    let removed = match engine::remove_share(&mut cfg, share_name) {
+        Some(r) => r,
+        None => {
+            dialogs::show_error_dialog(
+                "Error",
+                &format!("Favorite '{}' was not found.", share_name),
+            );
+            return;
+        }
+    };
+
+    if let Err(e) = config::save(&cfg) {
+        log::error!("Failed to save config after remove-favorite: {}", e);
+        dialogs::show_error_dialog("Error", &format!("Failed to save config: {}", e));
+        return;
+    }
+
+    // Cleanup if requested (unmount + remove symlink)
+    if choice.cleanup {
+        let mut guard = state.lock().unwrap();
+        match engine::cleanup_removed_share(&cfg, &mut guard.runtime_state, &removed.name) {
+            Ok((alias_count, unmount_results)) => {
+                let _ = engine::save_runtime_state(&guard.runtime_state);
+                log::info!(
+                    "Tray: removed '{}' with cleanup ({} aliases affected, {} unmount ops)",
+                    removed.name,
+                    alias_count,
+                    unmount_results.len()
+                );
+            }
+            Err(e) => {
+                log::error!("Cleanup failed for '{}': {}", removed.name, e);
+            }
+        }
+    } else {
+        log::info!("Tray: removed '{}' (no cleanup)", removed.name);
+    }
+
+    // Refresh statuses and rebuild menu
+    {
+        let mut guard = state.lock().unwrap();
+        guard.statuses = engine::verify_all(&cfg, &mut guard.runtime_state);
+    }
+
+    let health = {
+        let guard = state.lock().unwrap();
+        compute_health(&guard.statuses)
+    };
+    let new_menu = build_dynamic_menu(state);
+    if let Ok(tray) = tray.lock() {
+        tray.set_menu(Some(Box::new(new_menu)));
+        let _ = tray.set_icon(Some(make_icon_for_health(health)));
+    }
+}
+
 fn build_dynamic_menu(state: &Arc<Mutex<TrayState>>) -> Menu {
     let menu = Menu::new();
 
@@ -591,6 +769,16 @@ fn build_dynamic_menu(state: &Arc<Mutex<TrayState>>) -> Menu {
             let _ = submenu.append(&err_item);
         }
 
+        // Remove Favorite action (spec 15)
+        let _ = submenu.append(&PredefinedMenuItem::separator());
+        let remove_item = MenuItem::with_id(
+            format!("remove-favorite-{}", status.name),
+            "Remove Favorite...",
+            true,
+            None,
+        );
+        let _ = submenu.append(&remove_item);
+
         let _ = menu.append(&submenu);
     }
     drop(guard);
@@ -603,6 +791,10 @@ fn build_dynamic_menu(state: &Arc<Mutex<TrayState>>) -> Menu {
     }
 
     let _ = menu.append(&PredefinedMenuItem::separator());
+
+    // Favorites management (spec 15)
+    let add_fav = MenuItem::with_id("add-favorite", "Add Favorite...", true, None);
+    let _ = menu.append(&add_fav);
 
     // Bulk operations (spec 17)
     let mount_all = MenuItem::with_id("mount-all", "Mount All", true, None);

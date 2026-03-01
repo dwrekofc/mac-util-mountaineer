@@ -5,6 +5,7 @@ use clap::Parser;
 
 mod cli;
 mod config;
+mod dialogs;
 mod discovery;
 mod engine;
 mod gui;
