@@ -7,6 +7,7 @@
 use objc::runtime::Object;
 use objc::{class, msg_send, sel, sel_impl};
 use std::ffi::CStr;
+use std::path::{Path, PathBuf};
 
 /// Result from the "Add Favorite" dialog.
 pub struct AddFavoriteInput {
@@ -22,6 +23,11 @@ pub struct AddFavoriteInput {
 pub struct RemoveFavoriteChoice {
     pub confirmed: bool,
     pub cleanup: bool,
+}
+
+/// Result from the "Add Alias" dialog.
+pub struct AddAliasInput {
+    pub alias_name: String,
 }
 
 // --- ObjC geometry structs ---
@@ -281,5 +287,204 @@ pub fn show_error_dialog(title: &str, message: &str) {
         let _: () = msg_send![alert, setAlertStyle: 2i64];
         let _: () = msg_send![alert, addButtonWithTitle: nsstring("OK")];
         let _: () = msg_send![alert, runModal];
+    }
+}
+
+// --- Alias management dialogs (spec 16) ---
+
+/// Show a share selection dialog with a dropdown (NSPopUpButton).
+///
+/// Returns the selected share name, or `None` if cancelled.
+pub fn show_select_share_dialog(shares: &[String]) -> Option<String> {
+    unsafe {
+        let alert: *mut Object = msg_send![class!(NSAlert), new];
+        let _: () = msg_send![alert, setMessageText: nsstring("Select Share")];
+        let _: () = msg_send![alert, setInformativeText:
+            nsstring("Choose which share to browse for the alias target folder.")];
+        // NSAlertStyleInformational = 1
+        let _: () = msg_send![alert, setAlertStyle: 1i64];
+
+        let _: () = msg_send![alert, addButtonWithTitle: nsstring("Browse...")];
+        let _: () = msg_send![alert, addButtonWithTitle: nsstring("Cancel")];
+
+        // NSPopUpButton dropdown
+        let frame = NSRect {
+            origin: NSPoint { x: 0.0, y: 0.0 },
+            size: NSSize {
+                width: 300.0,
+                height: 28.0,
+            },
+        };
+        let popup: *mut Object = msg_send![class!(NSPopUpButton), alloc];
+        let popup: *mut Object = msg_send![popup, initWithFrame:frame pullsDown:false];
+
+        for share in shares {
+            let _: () = msg_send![popup, addItemWithTitle: nsstring(share)];
+        }
+
+        let _: () = msg_send![alert, setAccessoryView: popup];
+        let _: () = msg_send![alert, layout];
+
+        let response: i64 = msg_send![alert, runModal];
+        // NSAlertFirstButtonReturn = 1000
+        if response != 1000 {
+            return None;
+        }
+
+        let idx: i64 = msg_send![popup, indexOfSelectedItem];
+        if idx >= 0 && (idx as usize) < shares.len() {
+            Some(shares[idx as usize].clone())
+        } else {
+            None
+        }
+    }
+}
+
+/// Show a native macOS folder picker (NSOpenPanel) rooted at the given path.
+///
+/// Returns the selected folder path, or `None` if cancelled.
+pub fn show_folder_picker(root_path: &Path) -> Option<PathBuf> {
+    unsafe {
+        let panel: *mut Object = msg_send![class!(NSOpenPanel), openPanel];
+        let _: () = msg_send![panel, setCanChooseDirectories: true];
+        let _: () = msg_send![panel, setCanChooseFiles: false];
+        let _: () = msg_send![panel, setAllowsMultipleSelection: false];
+        let _: () = msg_send![panel, setMessage:
+            nsstring("Select a folder for the alias target")];
+        let _: () = msg_send![panel, setPrompt: nsstring("Select")];
+
+        // Set initial directory via NSURL
+        let path_str = format!("file://{}", root_path.display());
+        let url: *mut Object = msg_send![class!(NSURL), URLWithString: nsstring(&path_str)];
+        let _: () = msg_send![panel, setDirectoryURL: url];
+
+        // NSModalResponseOK = 1
+        let response: i64 = msg_send![panel, runModal];
+        if response != 1 {
+            return None;
+        }
+
+        let url: *mut Object = msg_send![panel, URL];
+        if url.is_null() {
+            return None;
+        }
+        let path_obj: *mut Object = msg_send![url, path];
+        if path_obj.is_null() {
+            return None;
+        }
+        let utf8: *const i8 = msg_send![path_obj, UTF8String];
+        let path_str = CStr::from_ptr(utf8).to_string_lossy().into_owned();
+        Some(PathBuf::from(path_str))
+    }
+}
+
+/// Show a dialog to name an alias after a folder has been selected.
+///
+/// Displays the share name and target subpath (read-only). The user enters an alias name.
+/// Returns `None` if cancelled.
+pub fn show_add_alias_dialog(share_name: &str, target_subpath: &str) -> Option<AddAliasInput> {
+    unsafe {
+        let alert: *mut Object = msg_send![class!(NSAlert), new];
+        let _: () = msg_send![alert, setMessageText: nsstring("Create Alias")];
+
+        let info = format!(
+            "Create an alias for folder '{}' in share '{}'.\n\n\
+             The alias will be a symlink at ~/Shares/Links/<name>.",
+            if target_subpath.is_empty() {
+                "(root)"
+            } else {
+                target_subpath
+            },
+            share_name
+        );
+        let _: () = msg_send![alert, setInformativeText: nsstring(&info)];
+        // NSAlertStyleInformational = 1
+        let _: () = msg_send![alert, setAlertStyle: 1i64];
+
+        let _: () = msg_send![alert, addButtonWithTitle: nsstring("Create")];
+        let _: () = msg_send![alert, addButtonWithTitle: nsstring("Cancel")];
+
+        // Accessory view: label + text field for alias name
+        let field_width: f64 = 300.0;
+        let field_height: f64 = 24.0;
+        let label_height: f64 = 17.0;
+        let total_height = label_height + 2.0 + field_height;
+
+        let frame = NSRect {
+            origin: NSPoint { x: 0.0, y: 0.0 },
+            size: NSSize {
+                width: field_width,
+                height: total_height,
+            },
+        };
+        let container: *mut Object = msg_send![class!(NSView), alloc];
+        let container: *mut Object = msg_send![container, initWithFrame: frame];
+
+        let label = make_label(
+            "Alias Name:",
+            NSRect {
+                origin: NSPoint {
+                    x: 0.0,
+                    y: field_height + 2.0,
+                },
+                size: NSSize {
+                    width: field_width,
+                    height: label_height,
+                },
+            },
+        );
+        let _: () = msg_send![container, addSubview: label];
+
+        let name_field = make_text_field(
+            "e.g. projects",
+            NSRect {
+                origin: NSPoint { x: 0.0, y: 0.0 },
+                size: NSSize {
+                    width: field_width,
+                    height: field_height,
+                },
+            },
+        );
+        let _: () = msg_send![container, addSubview: name_field];
+
+        let _: () = msg_send![alert, setAccessoryView: container];
+        let _: () = msg_send![alert, layout];
+
+        let window: *mut Object = msg_send![alert, window];
+        let _: () = msg_send![window, makeFirstResponder: name_field];
+
+        let response: i64 = msg_send![alert, runModal];
+        // NSAlertFirstButtonReturn = 1000
+        if response != 1000 {
+            return None;
+        }
+
+        let alias_name = get_field_string(name_field);
+        if alias_name.trim().is_empty() {
+            return None;
+        }
+
+        Some(AddAliasInput { alias_name })
+    }
+}
+
+/// Show a confirmation dialog for removing an alias.
+///
+/// Returns `true` if the user confirmed removal.
+pub fn show_remove_alias_dialog(alias_name: &str, target_path: &str) -> bool {
+    unsafe {
+        let alert: *mut Object = msg_send![class!(NSAlert), new];
+        let _: () = msg_send![alert, setMessageText:
+            nsstring(&format!("Remove alias '{}'?", alias_name))];
+        let _: () = msg_send![alert, setInformativeText:
+            nsstring(&format!("This will remove the alias symlink pointing to:\n{}", target_path))];
+        // NSAlertStyleCritical = 2
+        let _: () = msg_send![alert, setAlertStyle: 2i64];
+
+        let _: () = msg_send![alert, addButtonWithTitle: nsstring("Remove")];
+        let _: () = msg_send![alert, addButtonWithTitle: nsstring("Cancel")];
+
+        let response: i64 = msg_send![alert, runModal];
+        response == 1000 // NSAlertFirstButtonReturn
     }
 }

@@ -7,7 +7,7 @@ use gpui::*;
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
-use crate::config::{self, Backend, ShareConfig};
+use crate::config::{self, AliasConfig, Backend, ShareConfig};
 use crate::dialogs;
 use crate::engine::{self, RuntimeState, ShareStatus, SwitchResult};
 use crate::logging;
@@ -188,12 +188,20 @@ fn handle_menu_event(id: &str, state: &Arc<Mutex<TrayState>>, tray: &Arc<Mutex<T
         "add-favorite" => {
             handle_add_favorite(state, tray);
         }
+        "add-alias" => {
+            handle_add_alias(state, tray);
+        }
         "quit" => {
             // Handled in the event loop
         }
         _ if id.starts_with("remove-favorite-") => {
             if let Some(share_name) = id.strip_prefix("remove-favorite-") {
                 handle_remove_favorite(share_name, state, tray);
+            }
+        }
+        _ if id.starts_with("remove-alias-") => {
+            if let Some(alias_name) = id.strip_prefix("remove-alias-") {
+                handle_remove_alias(alias_name, state, tray);
             }
         }
         _ if id.starts_with("force-switch-") => {
@@ -447,6 +455,156 @@ fn handle_unmount_all(state: &Arc<Mutex<TrayState>>, tray: &Arc<Mutex<TrayIcon>>
     }
 
     log::info!("Tray: unmount-all complete");
+}
+
+/// Handle "Add Alias" tray action (spec 16).
+/// Three-step flow: select share → browse folder → name the alias.
+fn handle_add_alias(state: &Arc<Mutex<TrayState>>, tray: &Arc<Mutex<TrayIcon>>) {
+    let mut cfg = match config::load() {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("Failed to load config for add-alias: {}", e);
+            dialogs::show_error_dialog("Error", &format!("Failed to load config: {}", e));
+            return;
+        }
+    };
+
+    if cfg.shares.is_empty() {
+        dialogs::show_error_dialog(
+            "No Shares Configured",
+            "Add a favorite share first before creating aliases.",
+        );
+        return;
+    }
+
+    // Step 1: Select which share to create an alias for
+    let share_names: Vec<String> = cfg.shares.iter().map(|s| s.name.clone()).collect();
+    let share_name = match dialogs::show_select_share_dialog(&share_names) {
+        Some(name) => name,
+        None => return, // User cancelled
+    };
+
+    // Check that the share is mounted (spec 16: clear feedback if not mounted)
+    let stable_path = config::share_stable_path(&cfg, &share_name);
+    if std::fs::read_dir(&stable_path).is_err() {
+        dialogs::show_error_dialog(
+            "Share Not Mounted",
+            &format!(
+                "'{}' is not currently mounted. Mount it first using Mount All \
+                 or wait for auto-mount.",
+                share_name
+            ),
+        );
+        return;
+    }
+
+    // Step 2: Browse folder inside the share
+    let selected_path = match dialogs::show_folder_picker(&stable_path) {
+        Some(p) => p,
+        None => return, // User cancelled
+    };
+
+    // Compute the subpath relative to the share root.
+    // Canonicalize both paths since stable_path is a symlink to /Volumes/<share>.
+    let canon_root = std::fs::canonicalize(&stable_path).unwrap_or(stable_path.clone());
+    let canon_selected = std::fs::canonicalize(&selected_path).unwrap_or(selected_path.clone());
+    let target_subpath = canon_selected
+        .strip_prefix(&canon_root)
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    // Step 3: Name the alias
+    let input = match dialogs::show_add_alias_dialog(&share_name, &target_subpath) {
+        Some(input) => input,
+        None => return, // User cancelled
+    };
+
+    let alias_name = input.alias_name.trim().to_string();
+    if alias_name.is_empty() {
+        dialogs::show_error_dialog("Missing Name", "Alias name cannot be empty.");
+        return;
+    }
+
+    // Construct AliasConfig — same as CLI alias add
+    let path_buf = config::default_alias_path(&cfg, &alias_name);
+    let alias = AliasConfig {
+        name: alias_name.clone(),
+        path: config::normalize_alias_path(&path_buf),
+        share: share_name.clone(),
+        target_subpath,
+    };
+
+    if let Err(e) = engine::add_alias(&mut cfg, alias.clone()) {
+        dialogs::show_error_dialog("Cannot Add Alias", &e.to_string());
+        return;
+    }
+
+    if let Err(e) = config::save(&cfg) {
+        log::error!("Failed to save config after add-alias: {}", e);
+        dialogs::show_error_dialog("Error", &format!("Failed to save config: {}", e));
+        return;
+    }
+
+    // Reconcile the new alias to create the symlink
+    let status = engine::reconcile_alias(&cfg, &alias);
+    log::info!(
+        "Tray: added alias '{}' -> {}/{} (healthy: {})",
+        alias_name,
+        share_name,
+        alias.path,
+        status.healthy
+    );
+
+    // Rebuild menu to show the new alias
+    rebuild_menu(state, tray);
+}
+
+/// Handle "Remove Alias" tray action (spec 16).
+/// Shows a confirmation dialog, then calls engine::remove_alias.
+fn handle_remove_alias(
+    alias_name: &str,
+    state: &Arc<Mutex<TrayState>>,
+    tray: &Arc<Mutex<TrayIcon>>,
+) {
+    let mut cfg = match config::load() {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("Failed to load config for remove-alias: {}", e);
+            return;
+        }
+    };
+
+    // Find the alias to display its target path in the confirmation
+    let target_path = cfg
+        .aliases
+        .iter()
+        .find(|a| a.name.eq_ignore_ascii_case(alias_name))
+        .map(|a| {
+            let target = config::alias_target_path(&cfg, a);
+            target.to_string_lossy().to_string()
+        })
+        .unwrap_or_else(|| "(unknown)".to_string());
+
+    if !dialogs::show_remove_alias_dialog(alias_name, &target_path) {
+        return; // User cancelled
+    }
+
+    match engine::remove_alias(&mut cfg, alias_name) {
+        Ok(removed) => {
+            if let Err(e) = config::save(&cfg) {
+                log::error!("Failed to save config after remove-alias: {}", e);
+                return;
+            }
+            log::info!("Tray: removed alias '{}'", removed.name);
+        }
+        Err(e) => {
+            dialogs::show_error_dialog("Error", &format!("Failed to remove alias: {}", e));
+            return;
+        }
+    }
+
+    // Rebuild menu to reflect removal
+    rebuild_menu(state, tray);
 }
 
 /// Handle "Add Favorite" tray action (spec 15).
@@ -795,6 +953,55 @@ fn build_dynamic_menu(state: &Arc<Mutex<TrayState>>) -> Menu {
     // Favorites management (spec 15)
     let add_fav = MenuItem::with_id("add-favorite", "Add Favorite...", true, None);
     let _ = menu.append(&add_fav);
+
+    // Alias management submenu (spec 16)
+    {
+        let cfg = config::load().unwrap_or_default();
+        let alias_statuses = engine::inspect_aliases(&cfg);
+
+        let aliases_submenu = Submenu::new("Aliases", true);
+
+        if alias_statuses.is_empty() {
+            let empty =
+                MenuItem::with_id("info-no-aliases", "(no aliases configured)", false, None);
+            let _ = aliases_submenu.append(&empty);
+        } else {
+            for alias in &alias_statuses {
+                let health_label = if alias.healthy { "" } else { " [broken]" };
+                let subpath_display = if alias.target_subpath.is_empty() {
+                    alias.share.clone()
+                } else {
+                    format!("{}/{}", alias.share, alias.target_subpath)
+                };
+                let label = format!("{} -> {}{}", alias.name, subpath_display, health_label);
+                let info_item =
+                    MenuItem::with_id(format!("info-alias-{}", alias.name), &label, false, None);
+                let _ = aliases_submenu.append(&info_item);
+            }
+        }
+
+        let _ = aliases_submenu.append(&PredefinedMenuItem::separator());
+
+        if !cfg.shares.is_empty() {
+            let add_alias = MenuItem::with_id("add-alias", "Add Alias...", true, None);
+            let _ = aliases_submenu.append(&add_alias);
+        }
+
+        // Per-alias remove items
+        for alias in &alias_statuses {
+            let remove_item = MenuItem::with_id(
+                format!("remove-alias-{}", alias.name),
+                format!("Remove \"{}\"...", alias.name),
+                true,
+                None,
+            );
+            let _ = aliases_submenu.append(&remove_item);
+        }
+
+        let _ = menu.append(&aliases_submenu);
+    }
+
+    let _ = menu.append(&PredefinedMenuItem::separator());
 
     // Bulk operations (spec 17)
     let mount_all = MenuItem::with_id("mount-all", "Mount All", true, None);

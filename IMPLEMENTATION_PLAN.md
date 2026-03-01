@@ -3,7 +3,7 @@
 # Mountaineer V2 — Implementation Plan
 
 > Last updated: 2026-03-01
-> Status: Active — P0–P4 complete, P5.1 complete, P5.3 complete, P7 complete. Remaining: P5.2 (tray alias management), P6.x (migration).
+> Status: Active — P0–P5 complete, P7 complete. Remaining: P6.x (GPUI -> native migration).
 
 Items are sorted by priority. Each item references the authoritative spec(s).
 Items marked **[DONE]** are confirmed complete against their spec.
@@ -205,9 +205,7 @@ These must be resolved first. Every other item depends on correct foundations.
 
 ### P5.2 Alias management from tray
 - **Specs:** 16-tray-aliases
-- **Status:** [MISSING]
-- **Evidence:** Engine functions exist (`add_alias`, `remove_alias`, `inspect_aliases`, `list_folders`) and are used by CLI. No tray UI wiring.
-- **Work:** Folder browser (companion window — share must be mounted), alias creation/removal. Calls same engine functions.
+- **Status:** [DONE] — Added "Aliases" submenu showing existing aliases with health status and target paths. Three-step "Add Alias..." flow: (1) share selection via NSPopUpButton dropdown, (2) folder browsing via NSOpenPanel rooted at the share's stable path, (3) alias naming via NSAlert form. Subpath computed by canonicalizing both paths to handle symlinks. "Remove Alias..." per-alias with confirmation dialog showing target path. Share-not-mounted check with clear error dialog. All actions call same engine functions as CLI (`add_alias`, `remove_alias`, `inspect_aliases`, `reconcile_alias`). No new dependencies.
 
 ### P5.3 Bulk operations from tray
 - **Specs:** 17-tray-bulk-operations
@@ -316,6 +314,10 @@ Phase 8: Test Coverage (P7.1 -> P7.5) [ALL DONE]
 ---
 
 ## Change Log
+
+### 2026-03-01 (v18 — P5.2 tray alias management, P5 complete)
+- **P5.2 [DONE]:** Alias management from tray with three-step add flow (share select → folder browse → name alias). Aliases submenu shows existing aliases with health/path info, plus per-alias remove with confirmation. NSOpenPanel for native folder browsing, NSPopUpButton for share selection. Path canonicalization handles symlink resolution. All P5 items now complete.
+- **Total: 123 tests passing, 4 ignored (system-dependent). 0 failures. Clippy clean.**
 
 ### 2026-03-01 (v17 — P5.1 tray favorites management)
 - **P5.1 [DONE]:** Native macOS dialog-based favorites management from tray. New `dialogs.rs` module using `objc` crate for NSAlert with accessory views. "Add Favorite..." shows a 5-field form (share name, TB host, fallback host, username, remote share). "Remove Favorite..." per-share with confirmation dialog, cleanup checkbox, and alias impact count. All actions call the same engine functions as CLI. No new dependencies.
