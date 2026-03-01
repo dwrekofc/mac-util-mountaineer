@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -7,6 +8,7 @@ use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
 use crate::config::{self, Backend};
 use crate::engine::{self, RuntimeState, ShareStatus, SwitchResult};
+use crate::network;
 
 /// Shared state for the tray menu, updated by the background reconciliation loop.
 struct TrayState {
@@ -65,6 +67,34 @@ pub fn install(cx: &mut App) {
     })
     .detach();
 
+    // Start SCDynamicStore network change monitor (spec 11).
+    // A bridge thread reads network events, debounces them (500ms per spec 11),
+    // and sets a flag that the GPUI reconcile loop polls.
+    let network_changed = Arc::new(AtomicBool::new(false));
+    let network_changed_writer = Arc::clone(&network_changed);
+    let network_rx = network::monitor::start();
+    std::thread::Builder::new()
+        .name("tray-network-bridge".into())
+        .spawn(move || {
+            loop {
+                match network_rx.recv() {
+                    Ok(event) => {
+                        log::info!("Tray: network change detected: {:?}", event.changed_keys);
+                        // Debounce: drain further events for 500ms (spec 11)
+                        let debounce = Duration::from_millis(500);
+                        while network_rx.recv_timeout(debounce).is_ok() {}
+                        network_changed_writer.store(true, Ordering::Release);
+                        log::info!("Tray: network debounce complete, flagging reconcile");
+                    }
+                    Err(_) => {
+                        log::warn!("Tray: network monitor channel disconnected");
+                        break;
+                    }
+                }
+            }
+        })
+        .expect("failed to spawn tray network bridge thread");
+
     // Background reconciliation loop
     let state_for_reconcile = Arc::clone(&state);
     let tray_for_reconcile = Arc::clone(&tray);
@@ -87,9 +117,21 @@ pub fn install(cx: &mut App) {
                 tray.set_menu(Some(Box::new(new_menu)));
             }
 
-            cx.background_executor()
-                .timer(Duration::from_secs(check_interval))
-                .await;
+            // Poll at 500ms granularity so network events trigger reconcile within
+            // ~500ms instead of waiting the full check_interval (spec 11).
+            let poll_ms = 500u64;
+            let total_wait_ms = check_interval * 1000;
+            let mut waited_ms = 0u64;
+            while waited_ms < total_wait_ms {
+                if network_changed.swap(false, Ordering::AcqRel) {
+                    log::info!("Tray: network change flag set, triggering immediate reconcile");
+                    break;
+                }
+                cx.background_executor()
+                    .timer(Duration::from_millis(poll_ms))
+                    .await;
+                waited_ms += poll_ms;
+            }
         }
     })
     .detach();

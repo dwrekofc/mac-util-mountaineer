@@ -144,6 +144,10 @@ fn cmd_monitor(interval: Option<u64>) -> Result<()> {
         interval_secs
     );
 
+    // Start SCDynamicStore network change monitor (spec 11)
+    let network_rx = network::monitor::start();
+    log::info!("Network change monitor started for cmd_monitor");
+
     let mut state = engine::load_runtime_state().unwrap_or_default();
     loop {
         // Hot-reload config each cycle per spec 11
@@ -151,7 +155,25 @@ fn cmd_monitor(interval: Option<u64>) -> Result<()> {
         let statuses = engine::reconcile_all(&cfg, &mut state);
         print_status_table(&statuses);
         engine::save_runtime_state(&state)?;
-        std::thread::sleep(std::time::Duration::from_secs(interval_secs));
+
+        // Wait for either: timer expiry OR network change event (spec 11).
+        // On network event, debounce 500ms then immediately reconcile (spec 11).
+        match network_rx.recv_timeout(std::time::Duration::from_secs(interval_secs)) {
+            Ok(event) => {
+                log::info!("Network change detected: {:?}", event.changed_keys);
+                // Debounce: drain any further events arriving within 500ms (spec 11)
+                let debounce = std::time::Duration::from_millis(500);
+                while network_rx.recv_timeout(debounce).is_ok() {}
+                log::info!("Network debounce complete, triggering immediate reconcile");
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                // Normal timer-based reconcile — continue loop
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                log::warn!("Network monitor channel disconnected, falling back to timer-only");
+                std::thread::sleep(std::time::Duration::from_secs(interval_secs));
+            }
+        }
     }
 }
 

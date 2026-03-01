@@ -2,8 +2,8 @@
 
 # Mountaineer V2 — Implementation Plan
 
-> Last updated: 2026-02-27
-> Status: Active — P0.0–P0.8 complete; P1.1–P1.5, P1.6–P1.15, P3.5 complete. Remaining: P2.x, P3.x, P4.x–P7.x.
+> Last updated: 2026-03-01
+> Status: Active — P0.0–P0.8, P1.1–P1.15, P2.1–P2.2, P3.5 complete. Remaining: P3.x (cleanup), P4.x–P7.x.
 
 Items are sorted by priority. Each item references the authoritative spec(s).
 Items marked **[DONE]** are confirmed complete against their spec.
@@ -192,25 +192,12 @@ These must be resolved first. Every other item depends on correct foundations.
 
 ### P2.1 Wire SCDynamicStore events into V2 reconcile loop
 - **Specs:** 11-background-monitoring
-- **Status:** [PARTIAL] — `network/monitor.rs` is complete but unreachable (no `mod network;` in main.rs)
-- **Files:** `crates/mountaineer/src/main.rs` (cmd_monitor), `crates/mountaineer/src/tray.rs`, `crates/mountaineer/src/network/monitor.rs`
-- **Evidence:**
-  - `network/monitor.rs` fully implements SCDynamicStore watcher: `start()` spawns a background thread, returns `mpsc::Receiver<NetworkChangeEvent>`, watches 5 patterns covering IPv4/IPv6/Link/Global changes
-  - Tray reconcile loop (tray.rs:71-94) only uses `cx.background_executor().timer(Duration::from_secs(check_interval))` — never consumes network events
-  - `cmd_monitor` (main.rs:130-152) uses `thread::sleep` — never consumes network events
-- **Depends on:** P0.1 (must add `mod network;` first)
-- **Work:**
-  - In `cmd_monitor`: start `network::monitor::start()`, select on timer OR network event channel
-  - In tray reconcile loop: same — wake on network event or timer
-  - Trigger immediate reconcile cycle on network change event
+- **Status:** [DONE] — Both `cmd_monitor` and tray reconcile loop now consume `network::monitor::start()` events. `cmd_monitor` uses `recv_timeout` on the network channel (wakes on network event or timer expiry). Tray uses a bridge thread + `AtomicBool` flag polled at 500ms granularity in the GPUI async loop. Removed `#[allow(dead_code)]` from `network/mod.rs::monitor`.
+- **Files:** `crates/mountaineer/src/main.rs`, `crates/mountaineer/src/tray.rs`, `crates/mountaineer/src/network/mod.rs`
 
 ### P2.2 Add 500ms debounce for network events
 - **Specs:** 11-background-monitoring
-- **Status:** [MISSING] — debounce existed in dead `watcher.rs` only (watcher.rs:28-29)
-- **Files:** `crates/mountaineer/src/main.rs`, `crates/mountaineer/src/tray.rs` (wherever network events are consumed)
-- **Work:**
-  - After receiving a network change event, drain channel for 500ms before triggering reconcile
-  - Prevents thrashing on rapid interface changes (e.g., wake from sleep)
+- **Status:** [DONE] — Both `cmd_monitor` and tray bridge thread drain the network event channel for 500ms after the first event before triggering reconcile. Prevents thrashing on rapid interface changes (e.g., wake from sleep).
 
 ---
 
@@ -476,6 +463,11 @@ Phase 8: Test Coverage (P7.1 -> P7.5)
 ---
 
 ## Change Log
+
+### 2026-03-01 (v9 — P2 network event integration)
+- **P2.1 [DONE]:** Wired SCDynamicStore network events into both `cmd_monitor` and tray reconcile loops. `cmd_monitor` uses `recv_timeout` on the network channel to wake on network event or timer expiry. Tray uses a bridge thread + `AtomicBool` flag polled at 500ms granularity in the GPUI async loop. Removed `#[allow(dead_code)]` from `network/mod.rs::monitor`.
+- **P2.2 [DONE]:** Added 500ms debounce to both `cmd_monitor` and tray bridge thread. After receiving a network change event, the channel is drained for 500ms before triggering an immediate reconcile. Prevents thrashing on rapid interface changes (e.g., wake from sleep).
+- **32 tests pass.** No clippy warnings. All P2 items now complete.
 
 ### 2026-02-27 (v8 — P1 full completion)
 - **P1.3 [DONE]:** Added `config set` CLI command with `Set` and `Show` subcommands. Supports `lsof-recheck`, `auto-failback`, `check-interval`, `connect-timeout` keys. Validates inputs and uses atomic config save.
