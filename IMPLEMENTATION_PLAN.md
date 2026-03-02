@@ -3,7 +3,7 @@
 # Mountaineer V2 — Implementation Plan
 
 > Last updated: 2026-03-02
-> Status: P0–P7 complete. All phases done.
+> Status: P0–P8 complete. All phases done.
 
 Items are sorted by priority. Each item references the authoritative spec(s).
 Items marked **[DONE]** are confirmed complete against their spec.
@@ -241,17 +241,42 @@ These must be resolved first. Every other item depends on correct foundations.
 
 ---
 
+## P8 — Spec Compliance Gaps (discovered via code-vs-spec audit)
+
+### P8.1 lsof_recheck-triggered auto-switch independent of auto_failback
+- **Specs:** 04-tb-recovery (acceptance criteria #5: "Periodic lsof re-check auto-switches when files close")
+- **Status:** [DONE] — When `auto_failback=false` and `lsof_recheck=true`, the reconcile loop now periodically checks open files via `switch_backend_single_mount` after the stability window elapses. If files have closed, auto-switches to TB. If files remain open, defers. Error cases (unmount/mount failures) are logged and recorded in `last_error`. This is independent of `auto_failback` per spec 04 constraint.
+- **Files:** `engine.rs` (reconcile_share auto_failback=false branch)
+
+### P8.2 Set last_error when both backends unreachable
+- **Specs:** 03-failover ("set `last_error`" when failover impossible)
+- **Status:** [DONE] — When the active backend goes offline and the other backend is also unreachable, `last_error` is now set with a descriptive message (e.g., "SHARE: TB offline, Fallback also unreachable — no failover target"). Previously this case was silently skipped.
+- **Files:** `engine.rs` (reconcile_share failover branch)
+
+### P8.3 Add lsof_recheck to status --json output
+- **Specs:** 09-share-status, 10-cli-interface ("Include lsof_recheck current setting in global status")
+- **Status:** [DONE] — Added `StatusOutput` wrapper struct with `lsof_recheck: bool` and `shares: Vec<ShareStatus>`. Both `status --all --json` and `verify --json` now emit this wrapper instead of a bare array. 2 new unit tests: `status_output_json_includes_lsof_recheck`, `status_output_json_with_shares`.
+- **Files:** `engine.rs` (StatusOutput struct), `main.rs` (cmd_status, cmd_verify)
+
+### P8.4 Print plist path in install success message
+- **Specs:** 12-launchd-integration ("Install command reports success/failure and the plist path")
+- **Status:** [DONE] — `cmd_install` now prints the full plist path: "LaunchAgent installed at ~/Library/LaunchAgents/com.mountaineer.agent.plist". Added `pub fn installed_plist_path()` to `launchd.rs`.
+- **Files:** `main.rs` (cmd_install), `launchd.rs` (installed_plist_path)
+
+### P8.5 Log lsof open file count
+- **Specs:** 13-logging-and-diagnostics ("Open-file check results: file count, defer/proceed decision")
+- **Status:** [DONE] — `has_open_handles()` now logs the count of open handles (e.g., "lsof: 3 open handle(s) on /Volumes/SHARE") and logs warnings on lsof failure. Previously it returned a bool without logging details.
+- **Files:** `engine.rs` (has_open_handles)
+
+---
+
 ## Confirmed Working (No Action Needed)
 
 - **Failover guard logic** (Spec 03): `reconcile_share` checks `other_reachable` before calling `switch_backend_single_mount` — TB is NOT unmounted if FB is unreachable.
 - **Dual-mode logging** (Spec 13): `logging.rs` correctly implements `LoggingMode::Gui` (file-only) and `LoggingMode::Cli` (stderr + file) with `LineWriter`. Log path consistent between `logging::log_path()` and `launchd::generate_plist()`.
 - **Alias lifecycle** (Spec 07): `add_alias` validates share exists and rejects duplicate alias names case-insensitively. `reconcile_aliases` called from `reconcile_all`. Atomic symlink creation via `set_symlink_atomically`.
-- **auto_failback defaults to false** (Spec 02): `default_auto_failback()` returns `false`. Correct.
 - **TB stability window** (Spec 04): `auto_failback_stable_secs` (default 30) checked before auto-failback. Window resets when TB drops. Correct.
 - **Rollback on mount failure** (Spec 04): `switch_backend_single_mount` attempts remount of old backend on failure and restores symlink if rollback succeeds.
-- **TB recovery pending clears on TB drop** (Spec 04): `tb_recovery_pending = false` set when TB becomes unreachable. Correct.
-- **shares_root config field** (Spec 02/05): `shares_root_path(config)` reads from `config.global.shares_root` (default `~/Shares`), not hardcoded.
-- **Tray config hot-reload** (Spec 11): tray.rs calls `config::load()` on every reconcile cycle. Correct.
 
 ---
 
@@ -297,11 +322,22 @@ Phase 7: Tray Phase 2 (P5.1 -> P5.3)
 
 Phase 8: Test Coverage (P7.1 -> P7.5) [ALL DONE]
   [DONE] Config tests -> [DONE] CLI tests -> [DONE] Engine tests -> [DONE] Launchd tests -> [DONE] Fix flaky tests
+
+Phase 9: Spec Compliance Audit (P8.1 -> P8.5) [ALL DONE]
+  [DONE] lsof_recheck auto-switch -> [DONE] both-unreachable error -> [DONE] status JSON wrapper -> [DONE] install plist path -> [DONE] lsof logging
 ```
 
 ---
 
 ## Change Log
+
+### 2026-03-02 (v20 — P8 spec compliance gaps)
+- **P8.1 [DONE]:** lsof_recheck auto-switch independent of auto_failback — when `auto_failback=false` and `lsof_recheck=true`, reconcile loop periodically checks if open files have closed and auto-switches to TB after stability window.
+- **P8.2 [DONE]:** Set `last_error` when both backends are simultaneously unreachable — previously silently skipped.
+- **P8.3 [DONE]:** `StatusOutput` wrapper for JSON output includes `lsof_recheck` setting alongside per-share status.
+- **P8.4 [DONE]:** Install command prints plist path in success message.
+- **P8.5 [DONE]:** `has_open_handles()` logs open file count and lsof failures.
+- **Total: 125 tests passing, 4 ignored (system-dependent). 0 failures. Clippy clean.**
 
 ### 2026-03-02 (v19 — P6.1 GPUI -> native migration, all phases complete)
 - **P6.1 [DONE]:** Replaced GPUI with native macOS NSApplication lifecycle via `objc` crate. Removed gpui and gpui_platform dependencies. Manual AppKit event pump replaces GPUI's run loop. Background reconcile thread communicates with main thread via AtomicBool dirty flag. TrayIcon kept on main thread (!Send compliance). All tray functionality preserved.

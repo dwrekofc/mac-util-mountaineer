@@ -5,6 +5,11 @@ use std::process::{Command, Output};
 
 const LABEL: &str = "com.mountaineer.agent";
 
+/// Returns the path to the LaunchAgent plist file.
+pub fn installed_plist_path() -> Result<PathBuf> {
+    plist_path()
+}
+
 fn plist_path() -> Result<PathBuf> {
     let home = dirs::home_dir().context("Could not determine home directory")?;
     Ok(home

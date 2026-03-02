@@ -189,7 +189,11 @@ fn cmd_status(all: bool, json: bool) -> Result<()> {
     engine::save_runtime_state(&state)?;
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&statuses)?);
+        let output = engine::StatusOutput {
+            lsof_recheck: cfg.global.lsof_recheck,
+            shares: statuses,
+        };
+        println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
         print_status_table(&statuses);
     }
@@ -265,7 +269,11 @@ fn cmd_verify(target: MultiShareTarget, json: bool) -> Result<()> {
     };
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&statuses)?);
+        let output = engine::StatusOutput {
+            lsof_recheck: cfg.global.lsof_recheck,
+            shares: statuses,
+        };
+        println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
         print_status_table(&statuses);
     }
@@ -591,7 +599,10 @@ fn cmd_install() -> Result<()> {
         println!("LaunchAgent already exists. Reinstalling...");
     }
     launchd::install()?;
-    println!("LaunchAgent installed.");
+    println!(
+        "LaunchAgent installed at {}",
+        launchd::installed_plist_path()?.display()
+    );
     Ok(())
 }
 

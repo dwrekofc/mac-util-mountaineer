@@ -41,6 +41,14 @@ pub struct BackendStatus {
     pub last_error: Option<String>,
 }
 
+/// Wrapper for JSON `status --all --json` output that includes global config fields
+/// alongside per-share status, per spec 09 ("Include lsof_recheck current setting").
+#[derive(Debug, Clone, Serialize)]
+pub struct StatusOutput {
+    pub lsof_recheck: bool,
+    pub shares: Vec<ShareStatus>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ShareStatus {
     pub name: String,
@@ -739,17 +747,83 @@ fn reconcile_share(
                             state_entry_mut(state, &share.name).last_error = Some(msg);
                         }
                     }
+                } else {
+                    // Both backends unreachable — record the situation
+                    let msg = format!(
+                        "{}: {} offline, {} also unreachable — no failover target",
+                        share.name,
+                        active.short_label(),
+                        other.short_label()
+                    );
+                    log::warn!("{}", msg);
+                    last_error = Some(msg.clone());
+                    state_entry_mut(state, &share.name).last_error = Some(msg);
                 }
             } else if active == Backend::Fallback && tb.status.reachable {
-                // On Fallback but TB is reachable - set pending flag for manual switch
+                // On Fallback but TB is reachable
                 if !config.global.auto_failback {
-                    let entry = state_entry_mut(state, &share.name);
-                    if !entry.tb_recovery_pending {
-                        log::info!(
-                            "{}: TB is available - awaiting user confirmation to switch",
-                            share.name
-                        );
-                        entry.tb_recovery_pending = true;
+                    // Set pending flag for manual switch / TB Ready notification
+                    {
+                        let entry = state_entry_mut(state, &share.name);
+                        if !entry.tb_recovery_pending {
+                            log::info!(
+                                "{}: TB is available - awaiting user confirmation to switch",
+                                share.name
+                            );
+                            entry.tb_recovery_pending = true;
+                        }
+                    }
+                    // lsof_recheck: when enabled and recovery is pending, periodically
+                    // check if open files have closed and auto-switch to TB.
+                    // This is independent of auto_failback per spec 04:
+                    //   "lsof_recheck is a separate toggle from auto_failback"
+                    if config.global.lsof_recheck
+                        && let Some(since) = tb_stability_since
+                    {
+                        let stable_for = (now - since).num_seconds().max(0) as u64;
+                        if stable_for >= config.global.auto_failback_stable_secs {
+                            log::debug!(
+                                "{}: lsof_recheck: TB stable for {}s, checking open files",
+                                share.name,
+                                stable_for
+                            );
+                            match switch_backend_single_mount(
+                                config,
+                                state,
+                                share,
+                                Backend::Fallback,
+                                Backend::Tb,
+                                false,
+                            ) {
+                                SwitchResult::Success => {
+                                    // State already updated by switch function
+                                }
+                                SwitchResult::BusyOpenFiles => {
+                                    log::debug!(
+                                        "{}: lsof_recheck: open files still present, deferring",
+                                        share.name
+                                    );
+                                }
+                                SwitchResult::UnmountFailed(e) => {
+                                    let msg = format!(
+                                        "{}: lsof_recheck switch unmount failed: {}",
+                                        share.name, e
+                                    );
+                                    log::error!("{}", msg);
+                                    last_error = Some(msg.clone());
+                                    state_entry_mut(state, &share.name).last_error = Some(msg);
+                                }
+                                SwitchResult::MountFailed { error, .. } => {
+                                    let msg = format!(
+                                        "{}: lsof_recheck switch mount failed: {}",
+                                        share.name, error
+                                    );
+                                    log::error!("{}", msg);
+                                    last_error = Some(msg.clone());
+                                    state_entry_mut(state, &share.name).last_error = Some(msg);
+                                }
+                            }
+                        }
                     }
                 } else {
                     // Auto-failback is enabled - check stability window
@@ -1224,8 +1298,25 @@ fn path_eq(a: &Path, b: &Path) -> bool {
 fn has_open_handles(path: &Path) -> bool {
     let output = Command::new("lsof").arg("+D").arg(path).output();
     match output {
-        Ok(output) => !output.stdout.is_empty(),
-        Err(_) => false,
+        Ok(output) => {
+            if output.stdout.is_empty() {
+                false
+            } else {
+                // lsof header is 1 line; remaining lines are open handles
+                let count = output
+                    .stdout
+                    .iter()
+                    .filter(|&&b| b == b'\n')
+                    .count()
+                    .saturating_sub(1);
+                log::info!("lsof: {} open handle(s) on {}", count, path.display());
+                true
+            }
+        }
+        Err(e) => {
+            log::warn!("lsof check failed on {}: {}", path.display(), e);
+            false
+        }
     }
 }
 
@@ -1628,6 +1719,55 @@ mod tests {
         let json = serde_json::to_string(&state).unwrap();
         let parsed: RuntimeState = serde_json::from_str(&json).unwrap();
         assert!(parsed.shares.is_empty());
+    }
+
+    #[test]
+    fn status_output_json_includes_lsof_recheck() {
+        let output = StatusOutput {
+            lsof_recheck: true,
+            shares: vec![],
+        };
+        let json = serde_json::to_string_pretty(&output).unwrap();
+        assert!(json.contains("\"lsof_recheck\": true"));
+        assert!(json.contains("\"shares\": []"));
+    }
+
+    #[test]
+    fn status_output_json_with_shares() {
+        let status = ShareStatus {
+            name: "core".to_string(),
+            stable_path: "/home/test/Shares/core".to_string(),
+            active_backend: Some(Backend::Tb),
+            desired_backend: Some(Backend::Tb),
+            tb_recovery_pending: false,
+            tb: BackendStatus {
+                host: "10.0.0.1".to_string(),
+                mount_point: "/Volumes/core".to_string(),
+                reachable: true,
+                mounted: true,
+                alive: true,
+                ready: true,
+                last_error: None,
+            },
+            fallback: BackendStatus {
+                host: "10.0.1.1".to_string(),
+                mount_point: "/Volumes/core".to_string(),
+                reachable: true,
+                mounted: false,
+                alive: false,
+                ready: false,
+                last_error: None,
+            },
+            last_switch_at: None,
+            last_error: None,
+        };
+        let output = StatusOutput {
+            lsof_recheck: false,
+            shares: vec![status],
+        };
+        let json = serde_json::to_string_pretty(&output).unwrap();
+        assert!(json.contains("\"lsof_recheck\": false"));
+        assert!(json.contains("\"core\""));
     }
 
     // --- Symlink-related pure functions ---

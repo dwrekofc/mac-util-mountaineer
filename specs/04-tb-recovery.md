@@ -42,6 +42,7 @@ Manages the transition back from Fallback to Thunderbolt when TB becomes availab
 - `.planning/decisions-001.md` — User-Controlled Recovery decision
 
 ## Notes
-- **`--force` flag not implemented on CLI switch** `[observed from code]`: The `Switch` CLI command struct accepts `share` and `to` but does not include a `--force` flag. The engine's `switch_backend_single_mount` does accept a `force` parameter and skips open-file checks when true, but the CLI has no way to pass `true` currently.
-- **`lsof_recheck` toggle not implemented** `[observed from code]`: The engine always re-checks lsof each reconcile cycle when `tb_recovery_pending` is true (via `has_open_handles()` in `switch_backend_single_mount`). There is no config toggle to disable this behavior. See also spec 02 Notes.
-- **Recovery only triggers with `auto_failback` enabled** `[observed from code]`: When `auto_failback=false` (the default), the reconcile loop sets `tb_recovery_pending=true` but does NOT attempt auto-switch even if files close. The user must manually trigger via `switch --to tb`. When `auto_failback=true`, the engine checks the stability window and then calls `switch_backend_single_mount` which checks lsof internally. The `lsof_recheck` spec requirement (auto-switch when files close regardless of `auto_failback`) is NOT yet implemented — it requires adding `lsof_recheck` as a separate config toggle that triggers auto-switch independently of `auto_failback`.
+- All originally noted gaps have been resolved:
+  - `--force` flag wired to CLI `Switch` command (P1.1)
+  - `lsof_recheck` config toggle implemented (P1.2) and behavioral auto-switch independent of `auto_failback` (P8.1)
+  - When `auto_failback=false` and `lsof_recheck=true`, reconcile loop periodically checks if open files have closed and auto-switches to TB after the stability window
