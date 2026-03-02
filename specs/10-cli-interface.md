@@ -47,10 +47,10 @@ Provides a complete, scriptable command-line surface for all Mountaineer operati
 - `.planning/reqs-001.md` — JTBD 8, Phase 1 CLI Commands
 
 ## Notes
-- **Missing `--force` flags** `[observed from code]`: The `Switch` command struct has no `--force` field. The `Unmount` command struct has no `--force` field. Both are specified in the reqs and this spec but not yet wired in `cli.rs`.
-- **Missing `config set` command** `[observed from code]`: No `Config` variant exists in the `Command` enum. The `config set lsof-recheck on|off` command is not implemented.
-- **`mount --all` == `reconcile --all`** `[observed from code]`: `cmd_mount` delegates to `engine::reconcile_all`, making it functionally identical to reconcile. This is by design but worth noting — mount also performs failover/recovery logic.
+- **`--force` flags implemented** `[RESOLVED P1]`: Was: `Switch` and `Unmount` had no `--force` fields. Now both wired in `cli.rs`.
+- **`config set` command implemented** `[RESOLVED P1]`: Was: no `Config` variant in `Command` enum. Now `config set lsof-recheck on|off` and `config show` are implemented.
+- **`mount --all` == `reconcile --all`** `[observed from code]`: `cmd_mount` delegates to `engine::reconcile_all`, making it functionally identical to reconcile. This is by design — mount also performs failover/recovery logic.
 - **`status` requires `--all`** `[observed from code]`: The CLI rejects `status` without `--all`. Per-share `status --share <name>` is not supported — only `--all` mode. This differs from `verify` which supports both `--share` and `--all`.
-- **`mount-backends` command must be removed** `[observed from code]`: Code includes a `MountBackends` CLI command not in the spec. It calls `engine::mount_backends_for_shares` and is a dual-mount artifact. Must be removed along with all dual-mount code.
-- **`switch` uses old dual-mount path** `[observed from code]`: `cmd_switch` in `main.rs` calls `engine::switch_share` which uses `backend_mount_path` (dual-mount style) and `set_symlink_atomically` to point the stable path at the backend mount directory. In single-mount mode, it should call `switch_backend_single_mount` instead, which does the proper unmount-then-remount sequence at `/Volumes/<SHARE>`.
-- **`monitor` does not consume network events** `[observed from code]`: `cmd_monitor` uses a fixed `thread::sleep` loop and does not consume the SCDynamicStore network change events from `network::monitor`. The `watcher.rs` V1 code does consume them. This must be wired into the V2 monitor loop.
+- **`mount-backends` command removed** `[RESOLVED P0]`: Was: dual-mount artifact `MountBackends` CLI command. Removed along with all dual-mount code.
+- **`switch` uses single-mount path** `[RESOLVED P0]`: Was: `cmd_switch` used dual-mount `backend_mount_path`. Now calls `switch_backend_single_mount` for proper unmount-then-remount at `/Volumes/<SHARE>`.
+- **`monitor` consumes network events** `[RESOLVED P2]`: Was: `cmd_monitor` used fixed `thread::sleep` loop without network events. Now wired to SCDynamicStore network change events with 500ms debounce.

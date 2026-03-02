@@ -28,4 +28,4 @@ Enables adding and removing managed network shares directly from the menu bar ap
 - `.planning/reqs-001.md` — JTBD 13
 
 ## Notes
-- **Not yet implemented** `[observed from code]`: The current tray menu (`tray.rs`) does not include "Add Favorite" or "Remove Favorite" actions. The engine functions `add_or_update_share` and `remove_share` exist and are used by the CLI, but the tray has no UI for invoking them. This is a Phase 2 build task.
+- **Fully implemented** `[RESOLVED P5/P10]`: Was: no tray favorites UI. Now complete: "Add Favorite" presents a 5-field NSAlert form (name, TB host, fallback host, username, remote share name). "Remove Favorite" with cleanup option and confirmation dialog. Affected alias names listed in removal dialog (P10.3). Immediate mount after add via reconcile. Engine functions `add_share` and `remove_share` called from tray.

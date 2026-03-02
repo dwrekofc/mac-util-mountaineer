@@ -27,4 +27,4 @@ Provides single-click mount-all and unmount-all actions in the menu bar for quic
 - `.planning/reqs-001.md` — JTBD 15
 
 ## Notes
-- **Not yet implemented** `[observed from code]`: The current tray menu does not include "Mount All" or "Unmount All" actions. The engine functions `reconcile_all` and `unmount_all` exist and are used by the CLI. This is a Phase 2 build task.
+- **Fully implemented** `[RESOLVED P5/P10]`: Was: no tray bulk operations. Now complete: "Mount All" and "Unmount All" actions in tray menu. In-progress indicators during operations. No Force Unmount All in UI (by design — prevents accidental data loss). Busy shares reported to user via `dialogs::show_busy_shares_summary` dialog after Unmount All (P10.4). Engine functions `reconcile_all` and `unmount_all` called from tray.

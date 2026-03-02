@@ -3,52 +3,11 @@
 # Mountaineer V2 — Implementation Plan
 
 > Last updated: 2026-03-02
-> Status: P0–P11 complete. P12–P13 remaining. 125 tests, 0 failures, clippy clean.
+> Status: P0–P12 complete. P13 remaining (low priority). 125 tests, 0 failures, clippy clean.
 
 ---
 
 ## Remaining Work (Priority Order)
-
-### P12 — Stale Spec Documentation [TODO]
-
-- **P12.1** — Update stale "observed from code" notes across specs
-  - **Gap:** 14 spec files contain 34 stale `[observed from code]` notes describing issues that have since been resolved in P0–P9. These notes are misleading for future agents/developers.
-  - **Stale notes by file (34 total):**
-    - `specs/01-design-principles.md:40` — says "Config path mismatch, code uses ~/.config/mountaineer/" — FIXED in P0 (now `~/.mountaineer/`)
-    - `specs/01-design-principles.md:41` — says "UI framework mismatch, code uses GPUI" — FIXED in P6 (now `objc` crate)
-    - `specs/01-design-principles.md:42` — says "Dual-mount code must be removed" — FIXED in P0 (single_mount_mode toggle removed)
-    - `specs/01-design-principles.md:43` — says "V1 modules to remove: watcher.rs, discovery.rs V1 fns" — PARTIALLY STALE: watcher.rs removed, discovery.rs pruned. wol.rs still on disk but excluded from compilation.
-    - `specs/02-config-and-state.md:42` — says "Config path mismatch" — FIXED in P0
-    - `specs/02-config-and-state.md:43` — says "mount_root field must be removed" — FIXED in P0
-    - `specs/02-config-and-state.md:44` — says "single_mount_mode toggle must be removed" — FIXED in P0
-    - `specs/02-config-and-state.md:46` — says "lsof_recheck not in code" — FIXED in P1
-    - `specs/02-config-and-state.md:47` — says "Config validation not implemented" — FIXED in P1
-    - `specs/03-failover.md:41` — says "retry once requirement is not yet implemented" — FIXED in P1 (`engine.rs:272-296`)
-    - `specs/05-stable-paths.md:34` — says "set_symlink_atomically points at backend_mount_path" — FIXED in P0 (dual-mount artifact removed)
-    - `specs/06-favorites.md:36` — says "Upsert behavior must change to reject" — FIXED in P1 (`add_share` now rejects duplicates)
-    - `specs/08-bulk-operations.md:35` — says "Unmount CLI has no --force flag" — FIXED in P1
-    - `specs/08-bulk-operations.md:36` — says "unmount_all removes stable symlinks" — FIXED in P0 (symlinks preserved)
-    - `specs/08-bulk-operations.md:37` — says "Dual-backend iteration in unmount" — FIXED in P0 (single mount path)
-    - `specs/10-cli-interface.md:50` — says "Missing --force flags" — FIXED in P1
-    - `specs/10-cli-interface.md:51` — says "Missing config set command" — FIXED in P1
-    - `specs/10-cli-interface.md:54` — says "MountBackends CLI command must be removed" — FIXED in P0
-    - `specs/10-cli-interface.md:55` — says "cmd_switch uses old dual-mount path" — FIXED in P0
-    - `specs/10-cli-interface.md:56` — says "cmd_monitor does not consume network events" — FIXED in P2
-    - `specs/11-background-monitoring.md:36` — says "SCDynamicStore not connected to reconcile" — FIXED in P2
-    - `specs/11-background-monitoring.md:37` — says "500ms debounce in dead code only" — FIXED in P2
-    - `specs/11-background-monitoring.md:39` — says "State persistence not atomic" — FIXED in P1
-    - `specs/11-background-monitoring.md:40` — says "V1 watcher.rs is dead code" — FIXED in P3 (file removed)
-    - `specs/11-background-monitoring.md:41` — says "monitor CLI re-reads config only once" — FIXED in P1
-    - `specs/12-launchd-integration.md:33` — says "KeepAlive must use SuccessfulExit = false" — FIXED in P1
-    - `specs/12-launchd-integration.md:35` — says "Uninstall not idempotent" — FIXED in P1
-    - `specs/14-tray-tb-recovery.md:34` — says "Partially implemented, force-switch not yet implemented" — FIXED in P4 (note: upfront file-count dialog remains gap P10.1)
-    - `specs/14-tray-tb-recovery.md:35` — says "No in-progress indicator" — FIXED in P4
-    - `specs/15-tray-favorites.md:31` — says "Not yet implemented (Phase 2 task)" — FIXED in P5
-    - `specs/16-tray-aliases.md:32` — says "Not yet implemented (Phase 2 task)" — FIXED in P5
-    - `specs/17-tray-bulk-operations.md:30` — says "Not yet implemented (Phase 2 task)" — FIXED in P5
-    - `specs/18-tray-status-display.md:41` — says "Missing: last_error, icon health states, lsof_recheck" — FIXED in P4
-    - `specs/19-tray-quick-actions.md:35-36` — says "Missing: Open Logs, toggles" + "config save not atomic" — FIXED in P4/P1
-  - **Fix:** Update each spec file's Notes section to reflect actual implementation status. Mark resolved items with `[RESOLVED Pn]`. Note remaining gaps (P10.1–P10.6, P11.1) where applicable.
 
 ### P13 — Build & Packaging Polish [TODO, LOW PRIORITY]
 
@@ -114,6 +73,9 @@ lsof_recheck auto-switch independent of auto_failback, last_error on both-unreac
 - **P11.1** [DONE]: Report dependent aliases on `favorites remove` without `--cleanup`. In the non-cleanup branch of `FavoritesCommand::Remove`, added alias name collection and warning message listing affected aliases (spec 06 AC 7).
 - **Files:** `main.rs` (alias name collection + warning in FavoritesCommand::Remove non-cleanup branch)
 
+### P12 — Stale Spec Documentation [DONE]
+Updated 34 stale `[observed from code]` notes across 14 spec files. Each resolved item marked with `[RESOLVED Pn]` indicating which phase fixed it. Remaining valid observations (non-stale) preserved. Files updated: specs 01, 02, 03, 05, 06, 08, 10, 11, 12, 14, 15, 16, 17, 18, 19.
+
 ---
 
 ## Verified Complete — Full Spec Compliance Matrix
@@ -176,6 +138,12 @@ All 18+ commands implemented and tested: `reconcile`, `monitor`, `status`, `swit
 
 ## Change Log
 
+### 2026-03-02 (v26 — P12 stale spec documentation)
+- **P12.1 [DONE]:** Updated 34 stale `[observed from code]` notes across 14 spec files (specs 01, 02, 03, 05, 06, 08, 10, 11, 12, 14, 15, 16, 17, 18, 19).
+- Each resolved note marked with `[RESOLVED Pn]` — preserved as historical context while clearly indicating the issue is fixed.
+- Valid non-stale observations (e.g., mount adoption, config hot-reload approach, menu rebuild pattern) preserved unchanged.
+- **125 tests, 0 failures, 4 ignored. No code changes — spec documentation only.**
+
 ### 2026-03-02 (v25 — P10 + P11.1 implementation)
 - **All P10 items implemented (P10.1–P10.6):**
   - P10.1: `engine::open_handle_count()` public API + `dialogs::show_open_files_warning` pre-switch dialog with file count
@@ -200,33 +168,11 @@ All 18+ commands implemented and tested: `reconcile`, `monitor`, `status`, `swit
 - **Codebase health audit expanded:** 0 TODO/FIXME/HACK, 0 todo!()/unimplemented!(), 0 commented-out code, 0 stubs, all unwrap() calls audited.
 - **P13 items re-verified:** All 3 confirmed (version mismatch 0.1.0 vs 0.2.0, missing build env vars, no app icon).
 
-### 2026-03-02 (v23 — Independent verification audit)
-- Full independent re-audit of all 19 specs against all 16 source files using parallel analysis agents.
-- Confirmed all P0–P9 items complete with 125 tests, 0 failures, 0 TODO/FIXME/HACK markers, 0 `todo!()`/`unimplemented!()` macros.
-- **New gap found:** P10.4 — Unmount All does not explicitly report busy shares to user (spec 17 AC 3).
-- **P12 scope expanded:** Stale spec notes exist across 10+ files (not just specs 14–19). Added specs 03, 10, 12.
-- Verified: config save IS atomic (temp+rename at `config.rs:180-185`), failover retry IS implemented (`engine.rs:272-296`), all CLI --force flags wired, `config set/show` complete.
-
-### 2026-03-02 (v22 — Comprehensive gap analysis)
-- Full spec-vs-code audit across all 19 specs and all 16 source files.
-- Identified 3 tray UI gaps (P10.1–P10.3), 1 CLI gap (P11.1), stale spec docs (P12), build script issues (P13).
-- Updated compliance matrix confirming P0–P9 completeness.
-
-### 2026-03-02 (v21 — P9 spec compliance refinements)
-- **P9.1 [DONE]:** `tb_reachable_since` and `tb_healthy_since` added to `ShareStatus` per spec 09.
-- **P9.2 [DONE]:** Fixed hardcoded alias dialog path text to use `shares_root` from config.
-- **P9.3 [DONE]:** Updated stale spec 09 notes.
-- **Total: 125 tests passing, 4 ignored (system-dependent). 0 failures. Clippy clean.**
-
-### 2026-03-02 (v20 — P8 spec compliance gaps)
-- lsof_recheck auto-switch, both-unreachable error, StatusOutput JSON wrapper, install plist path, lsof logging.
-- **125 tests, 0 failures.**
-
-### 2026-03-02 (v19 — P6.1 GPUI -> native migration)
-- Replaced GPUI with native NSApplication via `objc` crate. **123 tests, 0 failures.**
-
-### 2026-03-01 (v18 — P5.2 alias management, v17 — P5.1 favorites management)
-- Tray alias management (NSOpenPanel + NSPopUpButton) and favorites management (NSAlert forms). **123 tests, 0 failures.**
-
-### 2026-03-01 (v16 — P7 test coverage, v15 — P5.3 bulk ops)
-- 86 new tests across config/CLI/engine/launchd. Bulk mount/unmount tray actions. **123 tests, 0 failures.**
+### Earlier (v16–v23)
+- v23: Independent verification audit — confirmed P0–P9, found P10.4 gap, expanded P12 scope.
+- v22: Comprehensive gap analysis — identified P10.1–P10.3, P11.1, P12, P13.
+- v21: P9 spec compliance refinements (timestamps, dialog path, spec 09 notes).
+- v20: P8 spec compliance gaps (lsof_recheck, StatusOutput, install message).
+- v19: P6.1 GPUI → native NSApplication migration.
+- v18/v17: P5 tray favorites/alias management.
+- v16/v15: P7 test coverage (86 new tests), P5.3 bulk ops.

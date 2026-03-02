@@ -32,7 +32,7 @@ Provides single-command mount and unmount of all managed shares for quick desk a
 
 ## Notes
 - **`mount --all` delegates to reconcile** `[observed from code]`: `cmd_mount` in `main.rs` calls `engine::reconcile_all`, making it functionally identical to `reconcile --all`. This matches the intent (mount via best interface) but means mount also triggers failover/recovery logic, not just mount.
-- **`--force` flag on unmount** `[observed from code]`: The `Unmount` CLI command struct only has an `all: bool` field — no `--force` flag is currently wired. The engine supports force unmount but the CLI must be updated to wire `--force`.
-- **Symlink removal bug** `[observed from code]`: `engine::unmount_all` (line ~406-409) removes stable symlinks (`~/Shares/<SHARE>`) after unmounting via `fs::remove_file`. This is incorrect — symlinks must persist through unmount/remount cycles. Code must be fixed to preserve symlinks on unmount.
-- **Dual-backend iteration in unmount** `[observed from code]`: `engine::unmount_all` iterates both `Backend::Tb` and `Backend::Fallback` per share, checking mount status at the dual-mount backend paths (`~/.mountaineer/mnts/core_tb`, `core_fb`). In single-mount mode, only one mount exists at `/Volumes/<SHARE>`. This is a dual-mount artifact — unmount should target the active mount path only.
+- **`--force` flag on unmount** `[RESOLVED P1]`: Was: `Unmount` CLI had no `--force` flag. Now wired in CLI and passed through to engine.
+- **Symlink preservation on unmount** `[RESOLVED P0]`: Was: `unmount_all` removed stable symlinks. Now symlinks are preserved through unmount/remount cycles — only removed via `favorites remove --cleanup`.
+- **Single-mount unmount path** `[RESOLVED P0]`: Was: `unmount_all` iterated dual-mount backend paths. Now targets only the active mount at `/Volumes/<SHARE>`.
 - **State cleared to None on unmount** `[observed from code]`: `unmount_all` sets `active_backend = None` after unmounting. This is correct behavior — after unmounting, no backend is active.

@@ -33,9 +33,9 @@ Runs a continuous reconciliation loop that probes interface availability, checks
 - `.planning/reqs-001.md` — JTBD 9
 
 ## Notes
-- **SCDynamicStore not connected to reconcile** `[observed from code]`: `network/monitor.rs` fully implements an SCDynamicStore watcher that watches IPv4/IPv6/Link changes and sends events to an mpsc channel. However, the tray reconciliation loop in `tray.rs` uses a fixed-interval timer and does not consume network events. The watcher was used in V1 `watcher.rs` (now dead code). Must be wired into the V2 reconcile loop.
-- **500ms debounce in dead code only** `[observed from code]`: The debounce logic exists in `watcher.rs` (V1 dead code). V2 reconcile loop must implement debouncing.
-- **Config hot-reload via re-read** `[observed from code]`: The tray reconcile loop reloads config from disk every cycle (`config::Config::load()`). This polling approach is acceptable — it achieves the functional goal without adding a file watcher dependency.
-- **State persistence not atomic** `[observed from code]`: `engine::save_runtime_state` writes state.json using `serde_json::to_string_pretty` + `fs::write`. Must be updated to atomic temp-then-rename to prevent corruption on crash.
-- **V1 `watcher.rs` is dead code** `[observed from code]`: `watcher.rs` implements a V1 watch loop using `network::monitor` and `discovery::discover_mounted_shares()`. It is not called by any V2 code path (V2 uses `tray.rs` reconcile loop or `cmd_monitor`). Should be removed along with `discovery.rs` V1 functions (`discover_mounted_shares`, `discover_mac_address`, etc.) that are only used by the watcher.
-- **`monitor` CLI re-reads config only once** `[observed from code]`: `cmd_monitor` loads config once at startup and reuses it for all cycles. It does not re-read config.toml each iteration, unlike the tray reconcile loop which re-reads every cycle. The monitor command needs config hot-reload to match the spec.
+- **SCDynamicStore wired to reconcile** `[RESOLVED P2]`: Was: tray reconcile loop did not consume network events. Now both tray and CLI monitor consume SCDynamicStore events via a dedicated network bridge thread.
+- **500ms debounce implemented** `[RESOLVED P2]`: Was: debounce only in V1 dead code. Now implemented in V2 — network bridge thread debounces SCDynamicStore events at 500ms.
+- **Config hot-reload via re-read** `[observed from code]`: Both tray and CLI monitor reconcile loops reload config from disk every cycle (`config::Config::load()`). This polling approach is acceptable — achieves the functional goal without adding a file watcher dependency.
+- **State persistence atomic** `[RESOLVED P1]`: Was: `save_runtime_state` used non-atomic `fs::write`. Now uses temp-then-rename for crash safety.
+- **V1 `watcher.rs` removed** `[RESOLVED P3]`: Was: dead code V1 watch loop. File removed. V1 functions in `discovery.rs` pruned.
+- **`monitor` CLI config hot-reload** `[RESOLVED P1]`: Was: `cmd_monitor` loaded config once at startup. Now re-reads config each cycle, matching tray behavior.

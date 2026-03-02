@@ -29,8 +29,10 @@ Provides one-click access to common tasks and settings toggles from the menu bar
 - `.planning/reqs-001.md` — JTBD 17
 
 ## Notes
-- **Partially implemented** `[observed from code]`: The tray menu currently includes:
-  - "Open Shares Folder" — calls `open {shares_root}` to open in Finder (working)
-  - "Quit Mountaineer" — signals `cx.quit()` (working)
-- **Missing from current tray** `[observed from code]`: "Open Logs" action, `auto_failback` toggle, `lsof_recheck` toggle, visual toggle state indicators. These are Phase 2 build tasks.
-- **Config atomic write** `[observed from code]`: `config::Config::save()` uses `fs::write` directly, not atomic temp-then-rename. The spec constraint says "Config writes must not corrupt the file (atomic write or equivalent)."
+- **Fully implemented** `[RESOLVED P4]`: The tray menu includes all quick actions:
+  - "Open Shares Folder" — opens `~/Shares` in Finder
+  - "Open Logs" — opens `~/Library/Logs/mountaineer.log` (P4)
+  - `auto_failback` toggle with `[on/off]` indicator (P4)
+  - `lsof_recheck` toggle with `[on/off]` indicator (P4)
+  - "Quit Mountaineer" — cleanly stops the process
+- **Config atomic write** `[RESOLVED P1]`: Was: `Config::save()` used non-atomic `fs::write`. Now uses temp-then-rename for crash safety.

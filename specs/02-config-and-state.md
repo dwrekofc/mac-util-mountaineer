@@ -39,9 +39,9 @@ Defines the configuration model (TOML) and runtime state persistence (JSON) that
 - `.planning/reqs-001.md` — Config Model (TOML), State Model
 
 ## Notes
-- **Config path mismatch** `[observed from code]`: Code loads config from `~/.config/mountaineer/config.toml` and state from `~/.config/mountaineer/state.json`. Code must be updated to use `~/.mountaineer/`.
-- **`mount_root` field must be removed** `[observed from code]`: `GlobalConfig` in `config.rs` still has a `mount_root` field (default `~/.mountaineer/mnts`) used by `backend_mount_path()` for dual-mount mode. This field must be removed along with all dual-mount code.
-- **`single_mount_mode` toggle must be removed** `[observed from code]`: `GlobalConfig` has `single_mount_mode: bool` (default true). Single-mount is the only architecture, not a toggle. This field must be removed.
-- **`auto_failback` default** `[observed from code]`: Code defaults `auto_failback` to `false`. This is correct per spec. The reqs config example shows `true` but the reqs example will be updated to match.
-- **`lsof_recheck` not in code** `[observed from code]`: The `GlobalConfig` struct does not currently include a `lsof_recheck` field. Must be added with default `true`.
-- **Config validation** `[observed from code]`: Code does not currently validate for duplicate share names or invalid hosts on load. Validation must be implemented.
+- **Config path** `[RESOLVED P0]`: Was: code used `~/.config/mountaineer/`. Now correctly uses `~/.mountaineer/` for both config.toml and state.json.
+- **`mount_root` field removed** `[RESOLVED P0]`: Was: `GlobalConfig` had a `mount_root` field for dual-mount. Field and all dual-mount code removed.
+- **`single_mount_mode` toggle removed** `[RESOLVED P0]`: Was: `GlobalConfig` had `single_mount_mode: bool`. Toggle removed — single-mount is the only architecture.
+- **`auto_failback` default** `[observed from code]`: Code defaults `auto_failback` to `false`. This is correct per spec.
+- **`lsof_recheck` implemented** `[RESOLVED P1]`: Was: `GlobalConfig` did not include `lsof_recheck`. Now present with default `true`.
+- **Config validation implemented** `[RESOLVED P1]`: Was: no validation for duplicate share names. Now validates on load — rejects missing required fields, duplicate share names.

@@ -32,11 +32,13 @@ Shows real-time per-share health, active interface, and recovery state in the me
 - `.planning/reqs-001.md` — JTBD 16
 
 ## Notes
-- **Partially implemented** `[observed from code]`: `tray.rs` `build_dynamic_menu` dynamically renders per-share submenus with:
+- **Fully implemented** `[RESOLVED P4]`: `tray.rs` `build_dynamic_menu` dynamically renders per-share submenus with:
   - Share name with filled/empty dot for connected/disconnected (`●`/`○`)
   - Active interface label (TB/Fallback)
   - `[TB available!]` badge when `tb_recovery_pending` is true
   - Per-backend reachability and mount status text
   - Global `"⚡ TB connections available"` notice when any share has pending recovery
-- **Missing from current tray** `[observed from code]`: `last_error` display, overall tray icon health states (all-healthy/some-degraded/all-disconnected), `lsof_recheck` status display. The tray icon is currently a static white triangle.
+  - `last_error` display per share (P4)
+  - Dynamic tray icon health states: white (all healthy), amber (some degraded), red (all disconnected) (P4)
+  - `lsof_recheck` status shown as toggle label with `[on/off]` indicator (P4)
 - **Menu rebuild on each reconcile** `[observed from code]`: The tray reconcile task rebuilds the entire menu from scratch every cycle. This achieves real-time updates but may cause UI flicker on rapid rebuilds.

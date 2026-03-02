@@ -31,5 +31,5 @@ Provides permanent, predictable file paths that applications, scripts, and Finde
 - `.planning/decisions-001.md` — Simplified Symlink decision
 
 ## Notes
-- **Symlink target mismatch in code** `[observed from code]`: In single-mount mode, `set_symlink_atomically` in `engine.rs` points the stable path at `backend_mount_path` (e.g., `~/.mountaineer/mnts/core_tb`) rather than `/Volumes/<SHARE>`. Under the V2 single-mount architecture, the stable symlink should point directly to `/Volumes/<SHARE>`. The `backend_mount_path` function itself is a dual-mount artifact.
+- **Symlink target corrected** `[RESOLVED P0]`: Was: `set_symlink_atomically` pointed at `backend_mount_path` (dual-mount artifact). Now correctly points to `/Volumes/<SHARE>`. The `backend_mount_path` function has been removed.
 - **Symlinks created during reconcile, not just favorites add** `[observed from code]`: `reconcile_share` calls `set_symlink_atomically` to update the stable path symlink after every mount or switch operation. This effectively recreates the symlink each cycle, satisfying the "validate symlink health during reconciliation" requirement.

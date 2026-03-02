@@ -37,8 +37,8 @@ Cross-cutting architecture invariants, conventions, and constraints that govern 
 - `.planning/decisions-001.md` — Single-Mount Architecture decision, Phase 2 UI decision
 
 ## Notes
-- **Config path mismatch** `[observed from code]`: Code uses `~/.config/mountaineer/` for config.toml and state.json. Code must be updated to use `~/.mountaineer/`.
-- **UI framework mismatch** `[observed from code]`: Code uses GPUI (from Zed) for the menu bar UI (`gui.rs`, `tray.rs`). GPUI will be removed and replaced with native Swift or lightweight macOS-native framework.
-- **Dual-mount code must be removed** `[observed from code]`: `engine.rs` retains `choose_desired_backend()` for dual-mount mode, controlled by a `single_mount_mode` config toggle (default true). This code must be removed — single-mount is the only architecture, not a toggle.
-- **V1 modules to remove** `[observed from code]`: `watcher.rs` (V1 watch loop), `discovery.rs` (contains V1 `discover_mounted_shares`, `mount_favorite`-related functions alongside still-useful `is_smb_reachable` and `check_share_available`), and `wol.rs` (Wake-on-LAN — not in any V2 requirement). V1 functions should be pruned; useful discovery functions (`is_smb_reachable`, `is_smb_reachable_with_timeout`) should be retained.
-- **`network/interface.rs` unused** `[observed from code]`: Module `network::interface` (interface enumeration via SCNetworkConfiguration) is marked `#[allow(dead_code)]` in `network/mod.rs`. It enumerates Ethernet/WiFi interfaces but is not called by any V2 code. Should be evaluated for removal or integration into status display.
+- **Config path** `[RESOLVED P0]`: Was: code used `~/.config/mountaineer/`. Now uses `~/.mountaineer/` as specified.
+- **UI framework** `[RESOLVED P6]`: Was: code used GPUI. Now uses native macOS NSApplication via `objc` crate — lightweight, direct AppKit bindings.
+- **Dual-mount code removed** `[RESOLVED P0]`: Was: `engine.rs` retained dual-mount mode with `single_mount_mode` toggle. All dual-mount code and the toggle removed. Single-mount is the only architecture.
+- **V1 modules cleaned** `[RESOLVED P0/P3]`: `watcher.rs` removed (P3). `discovery.rs` pruned to retain only `is_smb_reachable`/`is_smb_reachable_with_timeout` and gated `check_share_available` (P3). `wol.rs` remains on disk but excluded from compilation (no `mod wol;`) — retained for future WoL spec.
+- **`network/interface.rs` intentionally retained** `[observed from code]`: Module `network::interface` (interface enumeration via SCNetworkConfiguration) is marked `#[allow(dead_code)]`. Retained for future NIC auto-detection feature. 11 tests (4 ignored system-dependent, 7 pure unit).

@@ -29,4 +29,4 @@ Enables browsing share folder trees and creating/removing subfolder aliases from
 - `.planning/reqs-001.md` — JTBD 14
 
 ## Notes
-- **Not yet implemented** `[observed from code]`: The current tray menu does not include alias management or folder browsing. The engine functions `add_alias`, `remove_alias`, `inspect_aliases`, and `list_folders` exist and are used by the CLI, but the tray has no UI for invoking them. This is a Phase 2 build task.
+- **Fully implemented** `[RESOLVED P5]`: Was: no tray alias management or folder browsing. Now complete: three-step create flow (select share via NSPopUpButton → browse folder via NSOpenPanel → name alias). Existing aliases shown with targets and health status. Per-alias remove with confirmation. Clear feedback if share not mounted. Engine functions `add_alias`, `remove_alias`, `inspect_aliases` called from tray.
