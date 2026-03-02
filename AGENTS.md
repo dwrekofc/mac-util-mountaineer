@@ -7,7 +7,7 @@ This project is super green field and no one is using it yet. we are focused on 
 ## Build & Run
 
 - Language: Rust (edition 2024)
-- UI Framework: GPUI (from Zed)
+- UI: Native macOS (NSApplication via objc crate) + tray-icon crate
 - Build: `cargo build`
 - Run: `cargo run`
 
@@ -22,7 +22,6 @@ BINDGEN_EXTRA_CLANG_ARGS="-isysroot /Library/Developer/CommandLineTools/SDKs/Mac
 cargo build
 ```
 
-The `gpui_platform` dependency uses the `runtime_shaders` feature to avoid requiring the Metal toolchain (`xcrun metal`) at build time. Without this feature, you need Xcode's Metal Toolchain component installed.
 
 ## Validation
 
@@ -35,5 +34,4 @@ The `gpui_platform` dependency uses the `runtime_shaders` feature to avoid requi
 ### Codebase Patterns
 
 - Root Cargo.toml is a workspace manifest (not a package). The actual binary crate is in `crates/mountaineer/`.
-- GPUI application creation uses `gpui_platform::application()` (not `Application::new()` which no longer exists).
-- Network module (`network/monitor.rs`, `network/interface.rs`) is compiled but has `#[allow(dead_code)]` until wired into the reconcile loop.
+- Application lifecycle uses NSApplication directly via `objc` crate. Main thread runs a custom event pump; background reconcile thread signals it via AtomicBool.

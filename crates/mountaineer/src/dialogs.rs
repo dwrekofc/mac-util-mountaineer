@@ -2,7 +2,7 @@
 //!
 //! All unsafe ObjC calls are isolated in this module. Dialogs run modal
 //! on the main thread via NSAlert::runModal, which blocks until dismissed
-//! but allows the GPUI system event pump to continue processing events.
+//! but allows the AppKit event loop to continue processing events.
 
 use objc::runtime::Object;
 use objc::{class, msg_send, sel, sel_impl};

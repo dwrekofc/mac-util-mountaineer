@@ -2,8 +2,8 @@
 
 # Mountaineer V2 — Implementation Plan
 
-> Last updated: 2026-03-01
-> Status: Active — P0–P5 complete, P7 complete. Remaining: P6.x (GPUI -> native migration).
+> Last updated: 2026-03-02
+> Status: P0–P7 complete. All phases done.
 
 Items are sorted by priority. Each item references the authoritative spec(s).
 Items marked **[DONE]** are confirmed complete against their spec.
@@ -217,19 +217,8 @@ These must be resolved first. Every other item depends on correct foundations.
 
 ### P6.1 Replace GPUI with native macOS menu bar implementation
 - **Specs:** 01-design-principles (explicit: "Menu bar UI uses native Swift or a lightweight macOS-native framework -- explicitly NOT GPUI")
-- **Status:** [PARTIAL] — GPUI is used for the entire tray/menu bar system
-- **Files:** `crates/mountaineer/src/gui.rs`, `crates/mountaineer/src/tray.rs`, `crates/mountaineer/Cargo.toml` (GPUI deps)
-- **Evidence:**
-  - `gui.rs` creates `gpui::Application`, sets `NSApplication.setActivationPolicy(1)` (Accessory) via unsafe ObjC, delegates to `tray::install`
-  - `tray.rs` uses `gpui::AsyncApp`, `cx.spawn(...)`, `cx.background_executor().timer(...)`, `cx.quit()` for the async runtime
-  - Actual menu is built with `tray_icon` crate (native NSStatusItem) — not GPUI views
-  - GPUI provides the application lifecycle and async executor only — no GPUI views/elements/windows are rendered
-- **Work:**
-  - **Option A:** Swift companion app with XPC or CLI bridge to Rust engine
-  - **Option B:** Rust `objc2`/`cocoa` crate for direct AppKit `NSStatusItem` + `NSApplication.run()` — replace GPUI as the app lifecycle/async runtime
-  - **Option C:** Keep GPUI short-term, migrate later when tray features stabilize
-  - **Recommendation:** Resolve this architectural decision before implementing P4/P5 tray features to avoid throwaway work. Note: GPUI is only used as a runtime host, not for rendering — migration scope is smaller than it appears.
-- **Impact:** Affects all P4 and P5 items. If migrating, those should be built in the new framework.
+- **Status:** [DONE] — Removed GPUI dependency entirely. gui.rs now uses NSApplication directly via `objc` crate (setActivationPolicy Accessory, finishLaunching). tray.rs replaces GPUI async tasks with native threads: reconcile thread updates shared TrayState and sets AtomicBool dirty flag, main thread runs custom event loop pumping AppKit events via `nextEventMatchingMask:untilDate:inMode:dequeue:`, handles MenuEvent channel, and rebuilds TrayIcon when dirty. TrayIcon stays on main thread (!Send). All function signatures changed from `&Arc<Mutex<TrayIcon>>` to `&TrayIcon`. Removed gpui and gpui_platform from workspace and crate Cargo.toml. 123 tests passing, clippy clean.
+- **Files:** `crates/mountaineer/src/gui.rs`, `crates/mountaineer/src/tray.rs`, `Cargo.toml` (workspace), `crates/mountaineer/Cargo.toml`
 
 ---
 
@@ -268,8 +257,7 @@ These must be resolved first. Every other item depends on correct foundations.
 
 ## Environment & Toolchain Notes
 
-- **gpui API change:** `Application::new()` no longer exists. Must use `gpui_platform::application()` which calls `Application::with_platform(current_platform(false))`. `gpui_platform` added as workspace dep with `runtime_shaders` feature.
-- **Xcode license blocker:** Building requires either Xcode license accepted or `DEVELOPER_DIR=/Library/Developer/CommandLineTools` env var set. The `runtime_shaders` feature on `gpui_platform` avoids requiring the Metal toolchain at build time.
+- **Xcode license blocker:** Building requires either Xcode license accepted or `DEVELOPER_DIR=/Library/Developer/CommandLineTools` env var set.
 - **Root main.rs:** A stale GPUI hello-world `main.rs` existed at the repo root (not in `src/`). Deleted as part of workspace manifest cleanup (P0.0).
 
 ---
@@ -298,8 +286,8 @@ Phase 4: Dead Code (P3.1 -> P3.6)
   Dedup symlink fn -> Consolidate share_statuses/verify_all ->
   Move alias symlink removal into engine
 
-Phase 5: Architectural Decision (P6.1)
-  Decide GPUI vs Swift/native -- blocks P4/P5
+Phase 5: Architectural Decision (P6.1) [DONE]
+  [DONE] Removed GPUI, replaced with native NSApplication + AppKit event loop via objc crate
 
 Phase 6: Tray Enhancements (P4.1 -> P4.8)
   Quick actions -> Toggles -> Error display -> Dynamic icon -> Force-switch -> Progress
@@ -314,6 +302,10 @@ Phase 8: Test Coverage (P7.1 -> P7.5) [ALL DONE]
 ---
 
 ## Change Log
+
+### 2026-03-02 (v19 — P6.1 GPUI -> native migration, all phases complete)
+- **P6.1 [DONE]:** Replaced GPUI with native macOS NSApplication lifecycle via `objc` crate. Removed gpui and gpui_platform dependencies. Manual AppKit event pump replaces GPUI's run loop. Background reconcile thread communicates with main thread via AtomicBool dirty flag. TrayIcon kept on main thread (!Send compliance). All tray functionality preserved.
+- **Total: 123 tests passing, 4 ignored (system-dependent). 0 failures. Clippy clean.**
 
 ### 2026-03-01 (v18 — P5.2 tray alias management, P5 complete)
 - **P5.2 [DONE]:** Alias management from tray with three-step add flow (share select → folder browse → name alias). Aliases submenu shows existing aliases with health/path info, plus per-alias remove with confirmation. NSOpenPanel for native folder browsing, NSPopUpButton for share selection. Path canonicalization handles symlink resolution. All P5 items now complete.
@@ -333,42 +325,3 @@ Phase 8: Test Coverage (P7.1 -> P7.5) [ALL DONE]
 ### 2026-03-01 (v15 — P5.3 bulk ops, P7.4 launchd tests)
 - **P5.3 [DONE]:** Mount All / Unmount All tray menu items with in-progress indicators and health icon updates.
 - **P7.4 [DONE]:** 9 unit tests for launchd plist generation and error detection. 38 total tests pass.
-
-### 2026-03-01 (v14 — P4.8 in-progress indicators, P4 complete)
-- **P4.8 [DONE]:** In-progress "Switching..." indicator shown in menu during switch operations. All P4 items now complete.
-
-### 2026-03-01 (v13 — P4.7 force-switch)
-- **P4.7 [DONE]:** Force-switch option on open-files warning. Tracks busy shares in TrayState, shows warning + force-switch menu item, calls switch with `force=true`. 29 tests pass.
-
-### 2026-03-01 (v12 — P4.6 dynamic tray icon)
-- **P4.6 [DONE]:** Dynamic tray icon with white/yellow/red health states. Updated after every reconcile cycle. 29 tests pass.
-
-### 2026-03-01 (v11 — P4 tray UI enhancements)
-- **P4.1–P4.5 [DONE]:** Open Logs action, auto_failback/lsof_recheck toggles with [on/off] labels, last_error display in share submenus. 29 tests pass.
-
-### 2026-03-01 (v10 — P3 dead code cleanup)
-- **P3.3–P3.6 [DONE]:** Cleaned discovery.rs, promoted set_symlink_atomically to pub(crate), moved alias symlink removal into engine. 29 tests pass.
-
-### 2026-03-01 (v9 — P2 network event integration)
-- **P2.1–P2.2 [DONE]:** Wired SCDynamicStore events into cmd_monitor and tray; 500ms debounce on both paths. 32 tests pass.
-
-### 2026-02-27 (v8 — P1 full completion)
-- **P1.3–P1.4, P1.10, P1.12–P1.15 [DONE]:** config set command, duplicate rejection, config validation, failover retry, stale mount pre-cleanup, mount_all, favorites error reporting. 32 tests pass.
-
-### 2026-02-27 (v7 — P1 spec compliance batch)
-- **P1.1–P1.2, P1.5–P1.9, P1.11, P3.5 [DONE]:** --force flags, lsof_recheck, tb_recovery_pending status, atomic persistence, idempotent uninstall, KeepAlive fix, config hot-reload, share_statuses consolidation. 25 tests pass.
-
-### 2026-02-27 (v6 — P0 complete)
-- **P0.2–P0.3, P0.6–P0.7 [DONE]:** Removed dual-mount code, fixed volume paths, fixed cmd_switch, fixed tray engine bypass. 25 tests pass. All P0 items complete.
-
-### 2026-02-27 (v5 — P0 partial completion)
-- **P0.0–P0.1, P0.4–P0.5, P0.8 [DONE]:** Workspace manifest, network mod, config path, symlink preservation, watcher.rs removal. Added Environment & Toolchain Notes section.
-
-### 2026-02-27 (v4 — full re-verification)
-- Full re-verification with parallel subagents. Added P1.14, P1.15, P3.6. Updated P4.1 note about log_path visibility. All existing items confirmed accurate.
-
-### 2026-02-27 (v3 — comprehensive audit)
-- Added "Confirmed Working" section. Expanded P0.2, P0.3, P1.2, P1.13, P3.3. Clarified P4 GPUI-vs-tray_icon architecture. Added evidence sections with exact line numbers throughout.
-
-### 2026-02-27 (v2)
-- Added P0.0, P0.1, P0.7, P1.12, P1.13, P3.5. Renumbered items to reflect dependency chain. Updated all file paths to absolute crates/ prefixes.

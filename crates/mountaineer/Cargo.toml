@@ -21,8 +21,6 @@ anyhow.workspace = true
 nix.workspace = true
 core-foundation.workspace = true
 chrono = { version = "0.4", features = ["serde"] }
-gpui.workspace = true
-gpui_platform.workspace = true
 tray-icon.workspace = true
 objc = "0.2"
 

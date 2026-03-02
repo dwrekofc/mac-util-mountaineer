@@ -3,7 +3,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use gpui::*;
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
@@ -25,7 +24,7 @@ struct TrayState {
     in_progress: Option<String>,
 }
 
-pub fn install(cx: &mut App) {
+pub fn install() {
     // Load initial state
     let cfg = config::load().unwrap_or_default();
     let mut runtime_state = engine::load_runtime_state().unwrap_or_default();
@@ -47,40 +46,9 @@ pub fn install(cx: &mut App) {
         .build()
         .expect("failed to build tray icon");
 
-    // Keep tray alive
-    #[allow(clippy::arc_with_non_send_sync)]
-    let tray = Arc::new(Mutex::new(tray));
-
-    // Clone for the event handler
-    let state_for_events = Arc::clone(&state);
-    let tray_for_events = Arc::clone(&tray);
-
-    // Menu event handling loop
-    cx.spawn(async move |cx: &mut AsyncApp| {
-        let receiver = MenuEvent::receiver();
-
-        loop {
-            while let Ok(event) = receiver.try_recv() {
-                let id = event.id().0.as_str().to_string();
-                handle_menu_event(&id, &state_for_events, &tray_for_events);
-
-                // Check for quit
-                if id == "quit" {
-                    cx.update(|cx| cx.quit());
-                    return;
-                }
-            }
-
-            cx.background_executor()
-                .timer(Duration::from_millis(120))
-                .await;
-        }
-    })
-    .detach();
-
     // Start SCDynamicStore network change monitor (spec 11).
     // A bridge thread reads network events, debounces them (500ms per spec 11),
-    // and sets a flag that the GPUI reconcile loop polls.
+    // and sets a flag that the reconcile loop polls.
     let network_changed = Arc::new(AtomicBool::new(false));
     let network_changed_writer = Arc::clone(&network_changed);
     let network_rx = network::monitor::start();
@@ -106,56 +74,124 @@ pub fn install(cx: &mut App) {
         })
         .expect("failed to spawn tray network bridge thread");
 
-    // Background reconciliation loop
+    // Dirty flag: set by reconcile thread when TrayState is updated,
+    // read by main thread to trigger menu rebuild.
+    let state_dirty = Arc::new(AtomicBool::new(false));
+    let dirty_writer = Arc::clone(&state_dirty);
+
+    // Background reconciliation thread — updates TrayState only, never touches TrayIcon.
+    // TrayIcon is !Send, so all tray updates happen on the main thread.
     let state_for_reconcile = Arc::clone(&state);
-    let tray_for_reconcile = Arc::clone(&tray);
+    std::thread::Builder::new()
+        .name("tray-reconcile".into())
+        .spawn(move || {
+            loop {
+                // Load config and reconcile
+                let cfg = config::load().unwrap_or_default();
+                let check_interval = cfg.global.check_interval_secs;
 
-    cx.spawn(async move |cx: &mut AsyncApp| {
-        loop {
-            // Load config and reconcile
-            let cfg = config::load().unwrap_or_default();
-            let check_interval = cfg.global.check_interval_secs;
-
-            {
-                let mut guard = state_for_reconcile.lock().unwrap();
-                guard.statuses = engine::reconcile_all(&cfg, &mut guard.runtime_state);
-                let _ = engine::save_runtime_state(&guard.runtime_state);
-                // Clear busy_shares — reconcile may have resolved the open-files condition
-                guard.busy_shares.clear();
-            }
-
-            // Rebuild menu and update icon with current health (spec 18)
-            let health = {
-                let guard = state_for_reconcile.lock().unwrap();
-                compute_health(&guard.statuses)
-            };
-            let new_menu = build_dynamic_menu(&state_for_reconcile);
-            if let Ok(tray) = tray_for_reconcile.lock() {
-                tray.set_menu(Some(Box::new(new_menu)));
-                let _ = tray.set_icon(Some(make_icon_for_health(health)));
-            }
-
-            // Poll at 500ms granularity so network events trigger reconcile within
-            // ~500ms instead of waiting the full check_interval (spec 11).
-            let poll_ms = 500u64;
-            let total_wait_ms = check_interval * 1000;
-            let mut waited_ms = 0u64;
-            while waited_ms < total_wait_ms {
-                if network_changed.swap(false, Ordering::AcqRel) {
-                    log::info!("Tray: network change flag set, triggering immediate reconcile");
-                    break;
+                {
+                    let mut guard = state_for_reconcile.lock().unwrap();
+                    guard.statuses = engine::reconcile_all(&cfg, &mut guard.runtime_state);
+                    let _ = engine::save_runtime_state(&guard.runtime_state);
+                    // Clear busy_shares — reconcile may have resolved the open-files condition
+                    guard.busy_shares.clear();
                 }
-                cx.background_executor()
-                    .timer(Duration::from_millis(poll_ms))
-                    .await;
-                waited_ms += poll_ms;
+
+                // Signal main thread to rebuild menu
+                dirty_writer.store(true, Ordering::Release);
+
+                // Poll at 500ms granularity so network events trigger reconcile within
+                // ~500ms instead of waiting the full check_interval (spec 11).
+                let poll_ms = 500u64;
+                let total_wait_ms = check_interval * 1000;
+                let mut waited_ms = 0u64;
+                while waited_ms < total_wait_ms {
+                    if network_changed.swap(false, Ordering::AcqRel) {
+                        log::info!("Tray: network change flag set, triggering immediate reconcile");
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(poll_ms));
+                    waited_ms += poll_ms;
+                }
             }
-        }
-    })
-    .detach();
+        })
+        .expect("failed to spawn tray reconcile thread");
+
+    // Main thread event loop — processes AppKit events, menu events, and tray updates.
+    // This replaces GPUI's application run loop (spec 01: native macOS, not GPUI).
+    // TrayIcon lives here because it is !Send and must stay on the main thread.
+    run_main_loop(state, tray, state_dirty);
 }
 
-fn handle_menu_event(id: &str, state: &Arc<Mutex<TrayState>>, tray: &Arc<Mutex<TrayIcon>>) {
+/// Main-thread event loop. Pumps the macOS event queue, handles tray menu events,
+/// and rebuilds the menu when the background reconcile thread updates state.
+fn run_main_loop(state: Arc<Mutex<TrayState>>, tray: TrayIcon, state_dirty: Arc<AtomicBool>) -> ! {
+    let receiver = MenuEvent::receiver();
+
+    loop {
+        // 1. Pump macOS AppKit event queue (non-blocking).
+        //    Required for tray-icon menu events and NSAlert dialogs to function.
+        pump_appkit_events();
+
+        // 2. Handle tray menu item clicks
+        while let Ok(event) = receiver.try_recv() {
+            let id = event.id().0.as_str().to_string();
+            handle_menu_event(&id, &state, &tray);
+
+            if id == "quit" {
+                log::info!("Tray: quit requested");
+                std::process::exit(0);
+            }
+        }
+
+        // 3. If background reconcile updated state, rebuild menu on main thread
+        if state_dirty.swap(false, Ordering::AcqRel) {
+            let health = {
+                let guard = state.lock().unwrap();
+                compute_health(&guard.statuses)
+            };
+            let new_menu = build_dynamic_menu(&state);
+            tray.set_menu(Some(Box::new(new_menu)));
+            let _ = tray.set_icon(Some(make_icon_for_health(health)));
+        }
+
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Drain all pending macOS AppKit events without blocking.
+/// Uses NSApplication's manual event pump instead of `NSApplication.run()`,
+/// allowing us to interleave AppKit event processing with our own work.
+fn pump_appkit_events() {
+    unsafe {
+        use objc::{class, msg_send, sel, sel_impl};
+
+        // NSDefaultRunLoopMode — Foundation constant, toll-free bridged with kCFRunLoopDefaultMode
+        unsafe extern "C" {
+            static NSDefaultRunLoopMode: *mut objc::runtime::Object;
+        }
+
+        let ns_app: *mut objc::runtime::Object =
+            msg_send![class!(NSApplication), sharedApplication];
+        let distant_past: *mut objc::runtime::Object = msg_send![class!(NSDate), distantPast];
+
+        loop {
+            let event: *mut objc::runtime::Object = msg_send![ns_app,
+                nextEventMatchingMask: u64::MAX
+                untilDate: distant_past
+                inMode: NSDefaultRunLoopMode
+                dequeue: true
+            ];
+            if event.is_null() {
+                break;
+            }
+            let _: () = msg_send![ns_app, sendEvent: event];
+        }
+    }
+}
+
+fn handle_menu_event(id: &str, state: &Arc<Mutex<TrayState>>, tray: &TrayIcon) {
     match id {
         "open-shares" => {
             let _ = open_shares_folder();
@@ -255,7 +291,7 @@ fn handle_switch_with_force(
     to: Backend,
     force: bool,
     state: &Arc<Mutex<TrayState>>,
-    tray: &Arc<Mutex<TrayIcon>>,
+    tray: &TrayIcon,
 ) {
     let cfg = match config::load() {
         Ok(c) => c,
@@ -296,9 +332,7 @@ fn handle_switch_with_force(
             let _ = engine::save_runtime_state(&guard.runtime_state);
             drop(guard);
             let new_menu = build_dynamic_menu(state);
-            if let Ok(tray) = tray.lock() {
-                tray.set_menu(Some(Box::new(new_menu)));
-            }
+            tray.set_menu(Some(Box::new(new_menu)));
             return;
         }
     };
@@ -348,10 +382,8 @@ fn handle_switch_with_force(
             let health = compute_health(&guard.statuses);
             drop(guard);
             let new_menu = build_dynamic_menu(state);
-            if let Ok(tray) = tray.lock() {
-                tray.set_menu(Some(Box::new(new_menu)));
-                let _ = tray.set_icon(Some(make_icon_for_health(health)));
-            }
+            tray.set_menu(Some(Box::new(new_menu)));
+            let _ = tray.set_icon(Some(make_icon_for_health(health)));
         }
         SwitchResult::BusyOpenFiles => {
             log::warn!(
@@ -379,7 +411,7 @@ fn handle_switch_with_force(
 }
 
 /// Handle "Mount All" tray action (spec 17). Uses mount_all (no failover).
-fn handle_mount_all(state: &Arc<Mutex<TrayState>>, tray: &Arc<Mutex<TrayIcon>>) {
+fn handle_mount_all(state: &Arc<Mutex<TrayState>>, tray: &TrayIcon) {
     let cfg = match config::load() {
         Ok(c) => c,
         Err(e) => {
@@ -403,16 +435,14 @@ fn handle_mount_all(state: &Arc<Mutex<TrayState>>, tray: &Arc<Mutex<TrayIcon>>) 
     drop(guard);
 
     let new_menu = build_dynamic_menu(state);
-    if let Ok(tray) = tray.lock() {
-        tray.set_menu(Some(Box::new(new_menu)));
-        let _ = tray.set_icon(Some(make_icon_for_health(health)));
-    }
+    tray.set_menu(Some(Box::new(new_menu)));
+    let _ = tray.set_icon(Some(make_icon_for_health(health)));
 
     log::info!("Tray: mount-all complete");
 }
 
 /// Handle "Unmount All" tray action (spec 17). No force-unmount in tray (CLI only).
-fn handle_unmount_all(state: &Arc<Mutex<TrayState>>, tray: &Arc<Mutex<TrayIcon>>) {
+fn handle_unmount_all(state: &Arc<Mutex<TrayState>>, tray: &TrayIcon) {
     let cfg = match config::load() {
         Ok(c) => c,
         Err(e) => {
@@ -449,17 +479,15 @@ fn handle_unmount_all(state: &Arc<Mutex<TrayState>>, tray: &Arc<Mutex<TrayIcon>>
     drop(guard);
 
     let new_menu = build_dynamic_menu(state);
-    if let Ok(tray) = tray.lock() {
-        tray.set_menu(Some(Box::new(new_menu)));
-        let _ = tray.set_icon(Some(make_icon_for_health(health)));
-    }
+    tray.set_menu(Some(Box::new(new_menu)));
+    let _ = tray.set_icon(Some(make_icon_for_health(health)));
 
     log::info!("Tray: unmount-all complete");
 }
 
 /// Handle "Add Alias" tray action (spec 16).
-/// Three-step flow: select share → browse folder → name the alias.
-fn handle_add_alias(state: &Arc<Mutex<TrayState>>, tray: &Arc<Mutex<TrayIcon>>) {
+/// Three-step flow: select share -> browse folder -> name the alias.
+fn handle_add_alias(state: &Arc<Mutex<TrayState>>, tray: &TrayIcon) {
     let mut cfg = match config::load() {
         Ok(c) => c,
         Err(e) => {
@@ -561,11 +589,7 @@ fn handle_add_alias(state: &Arc<Mutex<TrayState>>, tray: &Arc<Mutex<TrayIcon>>) 
 
 /// Handle "Remove Alias" tray action (spec 16).
 /// Shows a confirmation dialog, then calls engine::remove_alias.
-fn handle_remove_alias(
-    alias_name: &str,
-    state: &Arc<Mutex<TrayState>>,
-    tray: &Arc<Mutex<TrayIcon>>,
-) {
+fn handle_remove_alias(alias_name: &str, state: &Arc<Mutex<TrayState>>, tray: &TrayIcon) {
     let mut cfg = match config::load() {
         Ok(c) => c,
         Err(e) => {
@@ -609,7 +633,7 @@ fn handle_remove_alias(
 
 /// Handle "Add Favorite" tray action (spec 15).
 /// Shows a native macOS form dialog, then calls engine::add_share and triggers mount.
-fn handle_add_favorite(state: &Arc<Mutex<TrayState>>, tray: &Arc<Mutex<TrayIcon>>) {
+fn handle_add_favorite(state: &Arc<Mutex<TrayState>>, tray: &TrayIcon) {
     // Show native dialog — blocks until user dismisses
     let input = match dialogs::show_add_favorite_dialog() {
         Some(input) => input,
@@ -685,19 +709,13 @@ fn handle_add_favorite(state: &Arc<Mutex<TrayState>>, tray: &Arc<Mutex<TrayIcon>
         compute_health(&guard.statuses)
     };
     let new_menu = build_dynamic_menu(state);
-    if let Ok(tray) = tray.lock() {
-        tray.set_menu(Some(Box::new(new_menu)));
-        let _ = tray.set_icon(Some(make_icon_for_health(health)));
-    }
+    tray.set_menu(Some(Box::new(new_menu)));
+    let _ = tray.set_icon(Some(make_icon_for_health(health)));
 }
 
 /// Handle "Remove Favorite" tray action (spec 15).
 /// Shows a confirmation dialog with cleanup option and alias impact reporting.
-fn handle_remove_favorite(
-    share_name: &str,
-    state: &Arc<Mutex<TrayState>>,
-    tray: &Arc<Mutex<TrayIcon>>,
-) {
+fn handle_remove_favorite(share_name: &str, state: &Arc<Mutex<TrayState>>, tray: &TrayIcon) {
     let cfg = match config::load() {
         Ok(c) => c,
         Err(e) => {
@@ -770,10 +788,8 @@ fn handle_remove_favorite(
         compute_health(&guard.statuses)
     };
     let new_menu = build_dynamic_menu(state);
-    if let Ok(tray) = tray.lock() {
-        tray.set_menu(Some(Box::new(new_menu)));
-        let _ = tray.set_icon(Some(make_icon_for_health(health)));
-    }
+    tray.set_menu(Some(Box::new(new_menu)));
+    let _ = tray.set_icon(Some(make_icon_for_health(health)));
 }
 
 fn build_dynamic_menu(state: &Arc<Mutex<TrayState>>) -> Menu {
@@ -1091,11 +1107,9 @@ fn toggle_config_bool(
 }
 
 /// Rebuild the tray menu from current state.
-fn rebuild_menu(state: &Arc<Mutex<TrayState>>, tray: &Arc<Mutex<TrayIcon>>) {
+fn rebuild_menu(state: &Arc<Mutex<TrayState>>, tray: &TrayIcon) {
     let new_menu = build_dynamic_menu(state);
-    if let Ok(tray) = tray.lock() {
-        tray.set_menu(Some(Box::new(new_menu)));
-    }
+    tray.set_menu(Some(Box::new(new_menu)));
 }
 
 /// Overall health state for the tray icon (spec 18).

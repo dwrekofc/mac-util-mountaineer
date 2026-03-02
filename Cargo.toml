@@ -17,6 +17,4 @@ clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 nix = { version = "0.30", features = ["net"] }
 core-foundation = "0.9"
-gpui = { git = "https://github.com/zed-industries/zed" }
-gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["runtime_shaders"] }
 tray-icon = "0.19"
