@@ -1,8 +1,13 @@
 <!-- description: Autonomous spec refinement — convert and refine specs from requirements -->
 0a. Find the OLDEST active requirements file in `.planning/`. Use a glob to list all `reqs-*.md` files in `.planning/` (NOT `.planning/archive/`), sort them, and read the one with the smallest increment number (e.g., `reqs-001.md` before `reqs-002.md`). Do NOT read from `.planning/archive/`. Do NOT read from `docs/` or any other location. If no `reqs-*.md` file exists in `.planning/`, stop and commit a note to `IMPLEMENTATION_PLAN.md` explaining that no requirements were found.
+
 0b. Check if a matching `decisions-*.md` file exists in `.planning/` (same increment number as the reqs file). If it exists, read it with a subagent. Do NOT read archived decisions.
+
 0c. Read all existing `specs/*.md` files (if any) with up to 250 parallel Sonnet subagents to understand current spec coverage.
+
 0d. If source code exists in `src/` or `crates/` or `apps/`, read it with up to 250 parallel Sonnet subagents to understand what has been implemented.
+
+0e. **When sources conflict, precedence is: reqs > specs > code. Specs must conform to reqs. Code mismatches are flagged, not resolved — the build loop handles implementation.**
 
 1. **Determine work mode and execute:**
 
