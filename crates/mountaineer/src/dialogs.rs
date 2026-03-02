@@ -9,6 +9,8 @@ use objc::{class, msg_send, sel, sel_impl};
 use std::ffi::CStr;
 use std::path::{Path, PathBuf};
 
+use crate::config::Backend;
+
 /// Result from the "Add Favorite" dialog.
 pub struct AddFavoriteInput {
     pub share_name: String,
@@ -218,26 +220,29 @@ pub fn show_add_favorite_dialog() -> Option<AddFavoriteInput> {
 
 /// Show a native macOS confirmation dialog for removing a favorite.
 ///
-/// Displays the share name, affected alias count, and offers
+/// Displays the share name, affected alias names, and offers
 /// a cleanup checkbox (default: checked).
 ///
 /// # Safety
 /// Must be called from the main thread (AppKit requirement).
 pub fn show_remove_favorite_dialog(
     share_name: &str,
-    affected_alias_count: usize,
+    affected_alias_names: &[String],
 ) -> RemoveFavoriteChoice {
     unsafe {
         let alert: *mut Object = msg_send![class!(NSAlert), new];
         let _: () = msg_send![alert, setMessageText:
             nsstring(&format!("Remove '{}'?", share_name))];
 
-        let info = if affected_alias_count > 0 {
+        let info = if !affected_alias_names.is_empty() {
+            let names_list = affected_alias_names.join(", ");
             format!(
                 "This will remove '{}' from your favorites.\n\n\
                  {} alias(es) reference this share and will need to be \
-                 updated or removed separately.",
-                share_name, affected_alias_count
+                 updated or removed separately:\n{}",
+                share_name,
+                affected_alias_names.len(),
+                names_list
             )
         } else {
             format!("This will remove '{}' from your favorites.", share_name)
@@ -382,7 +387,11 @@ pub fn show_folder_picker(root_path: &Path) -> Option<PathBuf> {
 ///
 /// Displays the share name and target subpath (read-only). The user enters an alias name.
 /// Returns `None` if cancelled.
-pub fn show_add_alias_dialog(share_name: &str, target_subpath: &str, alias_dir: &str) -> Option<AddAliasInput> {
+pub fn show_add_alias_dialog(
+    share_name: &str,
+    target_subpath: &str,
+    alias_dir: &str,
+) -> Option<AddAliasInput> {
     unsafe {
         let alert: *mut Object = msg_send![class!(NSAlert), new];
         let _: () = msg_send![alert, setMessageText: nsstring("Create Alias")];
@@ -487,5 +496,63 @@ pub fn show_remove_alias_dialog(alias_name: &str, target_path: &str) -> bool {
 
         let response: i64 = msg_send![alert, runModal];
         response == 1000 // NSAlertFirstButtonReturn
+    }
+}
+
+/// Show a warning dialog about open files before switching backends (spec 14 AC 2).
+///
+/// Displays the file count and offers "Force Switch" / "Cancel" buttons.
+/// Returns `true` if the user chose to proceed with force switch.
+pub fn show_open_files_warning(share_name: &str, open_count: usize, to: Backend) -> bool {
+    unsafe {
+        let alert: *mut Object = msg_send![class!(NSAlert), new];
+        let _: () = msg_send![alert, setMessageText:
+            nsstring(&format!("Open files on '{}'", share_name))];
+        let _: () = msg_send![alert, setInformativeText:
+        nsstring(&format!(
+            "{} file(s) are currently open on this share.\n\n\
+             Switching to {} while files are open may cause data loss \
+             or application errors.\n\n\
+             Close the files first, or force the switch.",
+            open_count,
+            to.short_label()
+        ))];
+        // NSAlertStyleCritical = 2
+        let _: () = msg_send![alert, setAlertStyle: 2i64];
+
+        let _: () = msg_send![alert, addButtonWithTitle:
+            nsstring(&format!("Force Switch to {}", to.short_label()))];
+        let _: () = msg_send![alert, addButtonWithTitle: nsstring("Cancel")];
+
+        let response: i64 = msg_send![alert, runModal];
+        response == 1000 // NSAlertFirstButtonReturn = Force Switch
+    }
+}
+
+/// Show a summary dialog after Unmount All listing busy shares (spec 17 AC 3).
+///
+/// Called when some shares could not be unmounted due to open files.
+pub fn show_busy_shares_summary(unmounted_count: usize, busy_names: &[String]) {
+    unsafe {
+        let alert: *mut Object = msg_send![class!(NSAlert), new];
+        let _: () = msg_send![alert, setMessageText: nsstring("Unmount All Complete")];
+
+        let info = if busy_names.is_empty() {
+            format!("{} share(s) unmounted successfully.", unmounted_count)
+        } else {
+            format!(
+                "{} share(s) unmounted.\n\n\
+                 {} share(s) could not be unmounted (open files):\n{}",
+                unmounted_count,
+                busy_names.len(),
+                busy_names.join("\n")
+            )
+        };
+        let _: () = msg_send![alert, setInformativeText: nsstring(&info)];
+        // NSAlertStyleInformational = 1 if no busy, NSAlertStyleCritical = 2 if busy
+        let style: i64 = if busy_names.is_empty() { 1 } else { 2 };
+        let _: () = msg_send![alert, setAlertStyle: style];
+        let _: () = msg_send![alert, addButtonWithTitle: nsstring("OK")];
+        let _: () = msg_send![alert, runModal];
     }
 }

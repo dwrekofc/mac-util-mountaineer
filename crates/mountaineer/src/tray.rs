@@ -339,6 +339,22 @@ fn handle_switch_with_force(
 
     let share_key = share_name.to_ascii_lowercase();
 
+    // P10.1: Before switching, check for open files and show warning with file count
+    // (spec 14 AC 2). Only check when not forcing — force bypasses open-file checks.
+    if !force {
+        let mount_point = config::volume_mount_path(&share.share_name);
+        let open_count = engine::open_handle_count(&mount_point);
+        if open_count > 0 {
+            drop(guard);
+            let proceed = dialogs::show_open_files_warning(share_name, open_count, to);
+            if !proceed {
+                return; // User cancelled
+            }
+            // User chose to proceed — re-acquire state and continue with force=true
+            return handle_switch_with_force(share_name, to, true, state, tray);
+        }
+    }
+
     // Show in-progress indicator in the menu (spec 14/17)
     guard.in_progress = Some(format!(
         "Switching {} to {}...",
@@ -396,8 +412,20 @@ fn handle_switch_with_force(
             drop(guard);
             rebuild_menu(state, tray);
         }
+        // P10.2: Show error dialogs on switch failure (spec 14 AC 5)
         SwitchResult::UnmountFailed(e) => {
             log::error!("{}: unmount failed: {}", share_name, e);
+            drop(guard);
+            dialogs::show_error_dialog(
+                "Switch Failed",
+                &format!(
+                    "Failed to unmount '{}' from {}:\n\n{}",
+                    share_name,
+                    from.short_label(),
+                    e
+                ),
+            );
+            rebuild_menu(state, tray);
         }
         SwitchResult::MountFailed { error, rolled_back } => {
             log::error!(
@@ -406,6 +434,23 @@ fn handle_switch_with_force(
                 error,
                 rolled_back
             );
+            let rollback_msg = if rolled_back {
+                format!("\n\nRolled back to {}.", from.short_label())
+            } else {
+                "\n\nRollback also failed — share may be unmounted.".to_string()
+            };
+            drop(guard);
+            dialogs::show_error_dialog(
+                "Switch Failed",
+                &format!(
+                    "Failed to mount '{}' via {}:\n\n{}{}",
+                    share_name,
+                    to.short_label(),
+                    error,
+                    rollback_msg
+                ),
+            );
+            rebuild_menu(state, tray);
         }
     }
 }
@@ -462,7 +507,9 @@ fn handle_unmount_all(state: &Arc<Mutex<TrayState>>, tray: &TrayIcon) {
     let _ = engine::save_runtime_state(&guard.runtime_state);
     guard.in_progress = None;
 
-    // Log results — busy shares are deferred, not force-unmounted
+    // P10.4: Collect busy share names and unmounted count for summary dialog (spec 17 AC 3)
+    let mut busy_names: Vec<String> = Vec::new();
+    let mut unmounted_count: usize = 0;
     for item in &results {
         if item.busy {
             log::warn!(
@@ -470,6 +517,9 @@ fn handle_unmount_all(state: &Arc<Mutex<TrayState>>, tray: &TrayIcon) {
                 item.share,
                 item.backend.short_label()
             );
+            busy_names.push(item.share.clone());
+        } else if item.unmounted {
+            unmounted_count += 1;
         }
     }
 
@@ -481,6 +531,11 @@ fn handle_unmount_all(state: &Arc<Mutex<TrayState>>, tray: &TrayIcon) {
     let new_menu = build_dynamic_menu(state);
     tray.set_menu(Some(Box::new(new_menu)));
     let _ = tray.set_icon(Some(make_icon_for_health(health)));
+
+    // Show summary dialog if any shares were busy (spec 17 AC 3)
+    if !busy_names.is_empty() {
+        dialogs::show_busy_shares_summary(unmounted_count, &busy_names);
+    }
 
     log::info!("Tray: unmount-all complete");
 }
@@ -726,15 +781,16 @@ fn handle_remove_favorite(share_name: &str, state: &Arc<Mutex<TrayState>>, tray:
         }
     };
 
-    // Count affected aliases for the confirmation dialog (spec 15: report dependent aliases)
-    let affected_aliases = cfg
+    // Collect affected alias names for the confirmation dialog (spec 15 AC 6: report dependent aliases)
+    let affected_alias_names: Vec<String> = cfg
         .aliases
         .iter()
         .filter(|a| a.share.eq_ignore_ascii_case(share_name))
-        .count();
+        .map(|a| a.name.clone())
+        .collect();
 
     // Show confirmation dialog
-    let choice = dialogs::show_remove_favorite_dialog(share_name, affected_aliases);
+    let choice = dialogs::show_remove_favorite_dialog(share_name, &affected_alias_names);
     if !choice.confirmed {
         return;
     }

@@ -3,7 +3,66 @@
 # Mountaineer V2 — Implementation Plan
 
 > Last updated: 2026-03-02
-> Status: P0–P9 complete. All phases done. 125 tests, 0 failures, clippy clean.
+> Status: P0–P11 complete. P12–P13 remaining. 125 tests, 0 failures, clippy clean.
+
+---
+
+## Remaining Work (Priority Order)
+
+### P12 — Stale Spec Documentation [TODO]
+
+- **P12.1** — Update stale "observed from code" notes across specs
+  - **Gap:** 14 spec files contain 34 stale `[observed from code]` notes describing issues that have since been resolved in P0–P9. These notes are misleading for future agents/developers.
+  - **Stale notes by file (34 total):**
+    - `specs/01-design-principles.md:40` — says "Config path mismatch, code uses ~/.config/mountaineer/" — FIXED in P0 (now `~/.mountaineer/`)
+    - `specs/01-design-principles.md:41` — says "UI framework mismatch, code uses GPUI" — FIXED in P6 (now `objc` crate)
+    - `specs/01-design-principles.md:42` — says "Dual-mount code must be removed" — FIXED in P0 (single_mount_mode toggle removed)
+    - `specs/01-design-principles.md:43` — says "V1 modules to remove: watcher.rs, discovery.rs V1 fns" — PARTIALLY STALE: watcher.rs removed, discovery.rs pruned. wol.rs still on disk but excluded from compilation.
+    - `specs/02-config-and-state.md:42` — says "Config path mismatch" — FIXED in P0
+    - `specs/02-config-and-state.md:43` — says "mount_root field must be removed" — FIXED in P0
+    - `specs/02-config-and-state.md:44` — says "single_mount_mode toggle must be removed" — FIXED in P0
+    - `specs/02-config-and-state.md:46` — says "lsof_recheck not in code" — FIXED in P1
+    - `specs/02-config-and-state.md:47` — says "Config validation not implemented" — FIXED in P1
+    - `specs/03-failover.md:41` — says "retry once requirement is not yet implemented" — FIXED in P1 (`engine.rs:272-296`)
+    - `specs/05-stable-paths.md:34` — says "set_symlink_atomically points at backend_mount_path" — FIXED in P0 (dual-mount artifact removed)
+    - `specs/06-favorites.md:36` — says "Upsert behavior must change to reject" — FIXED in P1 (`add_share` now rejects duplicates)
+    - `specs/08-bulk-operations.md:35` — says "Unmount CLI has no --force flag" — FIXED in P1
+    - `specs/08-bulk-operations.md:36` — says "unmount_all removes stable symlinks" — FIXED in P0 (symlinks preserved)
+    - `specs/08-bulk-operations.md:37` — says "Dual-backend iteration in unmount" — FIXED in P0 (single mount path)
+    - `specs/10-cli-interface.md:50` — says "Missing --force flags" — FIXED in P1
+    - `specs/10-cli-interface.md:51` — says "Missing config set command" — FIXED in P1
+    - `specs/10-cli-interface.md:54` — says "MountBackends CLI command must be removed" — FIXED in P0
+    - `specs/10-cli-interface.md:55` — says "cmd_switch uses old dual-mount path" — FIXED in P0
+    - `specs/10-cli-interface.md:56` — says "cmd_monitor does not consume network events" — FIXED in P2
+    - `specs/11-background-monitoring.md:36` — says "SCDynamicStore not connected to reconcile" — FIXED in P2
+    - `specs/11-background-monitoring.md:37` — says "500ms debounce in dead code only" — FIXED in P2
+    - `specs/11-background-monitoring.md:39` — says "State persistence not atomic" — FIXED in P1
+    - `specs/11-background-monitoring.md:40` — says "V1 watcher.rs is dead code" — FIXED in P3 (file removed)
+    - `specs/11-background-monitoring.md:41` — says "monitor CLI re-reads config only once" — FIXED in P1
+    - `specs/12-launchd-integration.md:33` — says "KeepAlive must use SuccessfulExit = false" — FIXED in P1
+    - `specs/12-launchd-integration.md:35` — says "Uninstall not idempotent" — FIXED in P1
+    - `specs/14-tray-tb-recovery.md:34` — says "Partially implemented, force-switch not yet implemented" — FIXED in P4 (note: upfront file-count dialog remains gap P10.1)
+    - `specs/14-tray-tb-recovery.md:35` — says "No in-progress indicator" — FIXED in P4
+    - `specs/15-tray-favorites.md:31` — says "Not yet implemented (Phase 2 task)" — FIXED in P5
+    - `specs/16-tray-aliases.md:32` — says "Not yet implemented (Phase 2 task)" — FIXED in P5
+    - `specs/17-tray-bulk-operations.md:30` — says "Not yet implemented (Phase 2 task)" — FIXED in P5
+    - `specs/18-tray-status-display.md:41` — says "Missing: last_error, icon health states, lsof_recheck" — FIXED in P4
+    - `specs/19-tray-quick-actions.md:35-36` — says "Missing: Open Logs, toggles" + "config save not atomic" — FIXED in P4/P1
+  - **Fix:** Update each spec file's Notes section to reflect actual implementation status. Mark resolved items with `[RESOLVED Pn]`. Note remaining gaps (P10.1–P10.6, P11.1) where applicable.
+
+### P13 — Build & Packaging Polish [TODO, LOW PRIORITY]
+
+- **P13.1** — `scripts/bundle-macos.sh` version sync
+  - **Gap:** Info.plist hardcodes `CFBundleVersion = "0.1.0"` (`bundle-macos.sh:30`) while `Cargo.toml` says `version = "0.2.0"`. No dynamic version extraction.
+  - **Fix:** Read version from `Cargo.toml` at build time and inject into Info.plist.
+
+- **P13.2** — Bundle script build environment
+  - **Gap:** `bundle-macos.sh:10` runs bare `cargo build --release` without `DEVELOPER_DIR`/`SDKROOT`/`BINDGEN_EXTRA_CLANG_ARGS` env vars that CLAUDE.md documents as required.
+  - **Fix:** Add environment variables to the build step.
+
+- **P13.3** — App icon
+  - **Gap:** No `.icns` file anywhere in the project. `Contents/Resources/` is created empty. No `CFBundleIconFile` key in Info.plist.
+  - **Fix:** Create or source an app icon and include it in the bundle + Info.plist `CFBundleIconFile`.
 
 ---
 
@@ -42,26 +101,69 @@ lsof_recheck auto-switch independent of auto_failback, last_error on both-unreac
 - **P9.3** [DONE]: Updated stale spec 09 notes — removed outdated observations about `tb_recovery_pending`, `lsof_recheck`, and timestamps not being in `ShareStatus` (all resolved).
 - **Files:** `engine.rs` (ShareStatus struct + reconcile_share + test), `dialogs.rs` (show_add_alias_dialog signature + text), `tray.rs` (caller update), `specs/09-share-status.md`
 
+### P10 — Tray UI & Engine Spec Compliance Gaps [DONE]
+- **P10.1** [DONE]: Pre-switch open-file count dialog. Added `engine::open_handle_count()` public function (refactored from `has_open_handles`). `tray.rs:handle_switch_with_force` now calls `open_handle_count` before switching; if files are open, shows `dialogs::show_open_files_warning` with count and "Force Switch" / "Cancel" buttons (spec 14 AC 2).
+- **P10.2** [DONE]: Error dialogs on switch failure. `UnmountFailed` and `MountFailed` branches in `handle_switch_with_force` now show `dialogs::show_error_dialog` with descriptive messages (including rollback status) and call `rebuild_menu` (spec 14 AC 5).
+- **P10.3** [DONE]: Alias names in remove-favorite dialog. `show_remove_favorite_dialog` now accepts `&[String]` of alias names instead of `usize` count. Dialog lists affected alias names. `tray.rs:handle_remove_favorite` collects alias names (spec 15 AC 6).
+- **P10.4** [DONE]: Busy share summary after Unmount All. Added `dialogs::show_busy_shares_summary` dialog. `handle_unmount_all` collects busy share names and unmounted count, shows summary dialog when any shares are busy (spec 17 AC 3).
+- **P10.5** [DONE]: Symlink health check in reconcile. After the `auto_switch` block in `reconcile_share`, added validation: if share has an active backend but stable symlink is missing or points to wrong target, recreates it via `set_symlink_atomically` (spec 05 AC 4).
+- **P10.6** [DONE]: `mount_all` active_backend state fix. In the `auto_switch=false` branch of `reconcile_share`, added detection of newly-mounted shares (probe shows ready but state has no active_backend). Updates `active_backend` and creates stable symlink immediately (spec 08 AC 6).
+- **Files:** `engine.rs` (open_handle_count, reconcile_share symlink check, mount_all state fix), `tray.rs` (pre-switch dialog, error dialogs, busy summary, alias names), `dialogs.rs` (show_open_files_warning, show_busy_shares_summary, show_remove_favorite_dialog signature change)
+
+### P11 — CLI Spec Compliance Gap [DONE]
+- **P11.1** [DONE]: Report dependent aliases on `favorites remove` without `--cleanup`. In the non-cleanup branch of `FavoritesCommand::Remove`, added alias name collection and warning message listing affected aliases (spec 06 AC 7).
+- **Files:** `main.rs` (alias name collection + warning in FavoritesCommand::Remove non-cleanup branch)
+
 ---
 
-## Confirmed Working (No Action Needed)
+## Verified Complete — Full Spec Compliance Matrix
 
-- **Failover guard logic** (Spec 03): `reconcile_share` checks `other_reachable` before switching — TB is NOT unmounted if FB is unreachable.
-- **Dual-mode logging** (Spec 13): `logging.rs` implements `LoggingMode::Gui` (file-only) and `LoggingMode::Cli` (stderr + file) with `LineWriter`.
-- **Alias lifecycle** (Spec 07): `add_alias` validates share exists and rejects duplicates case-insensitively. `reconcile_aliases` called from `reconcile_all`. Atomic symlink creation.
-- **TB stability window** (Spec 04): `auto_failback_stable_secs` (default 30) checked before auto-failback. Window resets when TB drops.
-- **Rollback on mount failure** (Spec 04): `switch_backend_single_mount` attempts remount of old backend on failure and restores symlink.
-- **shares_root config** (Spec 02): All symlink/alias paths use `config::shares_root_path()` — no hardcoded `~/Shares` in runtime code.
-- **All JSON outputs** (Specs 06, 07, 09, 10): `favorites list --json`, `alias list --json`, `status --all --json`, `verify --json` all produce valid JSON.
-- **folders command** (Spec 10): `mountaineer folders --share <name> [--subpath <dir>] [--json]` fully implemented.
+### Core Engine (Specs 01–09)
+- **Spec 01 (Design Principles):** Single-mount architecture, `/Volumes/<SHARE>` paths, `~/.mountaineer/` config root, native macOS via `objc` crate (qualifies as "lightweight macOS-native framework"), CLI independent of UI, all UI actions call engine functions.
+- **Spec 02 (Config & State):** All 6 `GlobalConfig` fields with correct defaults (`shares_root=~/Shares`, `check_interval_secs=2`, `auto_failback=false`, `auto_failback_stable_secs=30`, `connect_timeout_ms=800`, `lsof_recheck=true`). All `ShareConfig` and `AliasConfig` fields present. Atomic persistence (temp-then-rename) for both config and state. Config hot-reload in both CLI monitor and tray reconcile loops. `~/` expansion via `expand_path`. Validation rejects duplicate/empty names.
+- **Spec 03 (Failover):** TCP 445 probe via `discovery::is_smb_reachable_with_timeout`. Fallback reachability verified before unmounting TB. Both-unreachable sets `last_error` without unmounting. Fallback mount retried once on failure. Stale mount detection and cleanup. Volume path always `/Volumes/<SHARE>`.
+- **Spec 04 (TB Recovery):** `tb_reachable_since` and `tb_healthy_since` timestamps tracked. Stability window (`auto_failback_stable_secs`) with reset on TB drop. `lsof_recheck` independent of `auto_failback`. Auto-switch on file close even when `auto_failback=false`. `--force` bypasses lsof. Rollback on mount failure. `tb_recovery_pending` cleared on recovery or TB drop.
+- **Spec 05 (Stable Paths):** `~/Shares/<SHARE> → /Volumes/<SHARE>` symlink per share. Atomic creation (temp-then-rename). Created on mount/switch. Removed only on `favorites remove --cleanup`. Recreated during reconcile if missing or broken (P10.5).
+- **Spec 06 (Favorites):** `add` creates config+symlink+mount. `remove --cleanup` unmounts+removes symlink+config. `remove` (no cleanup) removes config only. Duplicate rejection. `favorites list --json` valid JSON. Dependent aliases reported on remove (P11.1).
+- **Spec 07 (Aliases):** `add` creates symlink through stable paths. `--alias-path` override supported. `remove` deletes symlink+config. `reconcile` repairs broken symlinks. Share existence validated. Names unique case-insensitively.
+- **Spec 08 (Bulk Operations):** `mount --all` mounts unmounted favorites, skips already-mounted. `unmount --all` defers busy shares. `--force` bypasses lsof. Per-share results reported. Symlinks preserved. `mount_all` now correctly updates `active_backend` state for newly-mounted shares (P10.6).
+- **Spec 09 (Share Status):** Full `ShareStatus` struct with all fields including `tb_reachable_since`, `tb_healthy_since`. `StatusOutput` wrapper includes `lsof_recheck`. `status --all --json` and `verify --all --json` produce valid JSON. "TB Ready" indicator.
+
+### CLI (Spec 10)
+All 18+ commands implemented and tested: `reconcile`, `monitor`, `status`, `switch`, `verify`, `mount`, `unmount`, `folders`, `alias add/list/remove/reconcile`, `favorites add/remove/list`, `install`, `uninstall`, `config set/show`.
+
+### Infrastructure (Specs 11–13)
+- **Spec 11 (Background Monitoring):** Reconcile loop at `check_interval_secs`. SCDynamicStore network events with 500ms debounce. Atomic state persistence. Config hot-reload each cycle (both CLI monitor and tray). `lsof` re-check each cycle for recovery-pending shares.
+- **Spec 12 (LaunchAgent):** Plist at `~/Library/LaunchAgents/com.mountaineer.agent.plist`. `RunAtLoad=true`, `KeepAlive={SuccessfulExit=false}`, `RUST_LOG=info`, stdout/stderr to log file, correct binary path. `launchctl bootstrap/bootout` with `gui/{uid}`. Idempotent uninstall.
+- **Spec 13 (Logging):** `~/Library/Logs/mountaineer.log`. CLI mode: stderr + file via `MultiWriter`. GUI mode: file only. `LineWriter` for immediate flush. `RUST_LOG` override.
+
+### Tray UI (Specs 14–19)
+- **Spec 14 (TB Recovery):** "Switch to TB" appears when `tb_recovery_pending=true`. Force Switch option after busy detection. In-progress indicator. Menu updates on success. Hidden when TB unavailable. Upfront file-count warning dialog before switch (P10.1). Error dialogs on switch failure (P10.2).
+- **Spec 15 (Favorites):** Add Favorite form (5 fields via NSAlert). Immediate mount after add. Remove with cleanup option + confirmation. Affected alias names listed in removal dialog (P10.3).
+- **Spec 16 (Aliases):** Folder browsing via NSOpenPanel. Three-step create flow (select share → browse → name). Existing aliases shown with targets and health. Remove per alias with confirmation. Clear feedback if share not mounted.
+- **Spec 17 (Bulk Operations):** Mount All and Unmount All actions. In-progress indicators. No Force Unmount All in UI. Busy shares reported to user with summary dialog after Unmount All (P10.4).
+- **Spec 18 (Status Display):** Per-share name, status indicator (●/○), active interface. "TB Ready" badge (`[TB available!]`) and global banner. `last_error` per share. Dynamic health icon (white/amber/red). `lsof_recheck` status as toggle label.
+- **Spec 19 (Quick Actions):** Open Shares Folder, Open Logs, auto_failback toggle, lsof_recheck toggle (both with `[on/off]` indicators), Quit. Toggles persist atomically via config load-mutate-save.
 
 ---
 
 ## Dead Code (Intentionally Retained)
 
-- `network/interface.rs` — `#[allow(dead_code)]` module for future NIC auto-detection. No callers.
-- `discovery.rs` `check_share_available` cluster — gated for future smbutil view preflight. Has unit tests.
-- `wol.rs` — excluded from compilation (no `mod wol;`). Retained for future WoL spec.
+- `network/interface.rs` — `#[allow(dead_code)]` module for future NIC auto-detection. No callers. 11 tests (4 ignored system-dependent, 7 pure unit).
+- `discovery.rs` `check_share_available` cluster — gated for future smbutil view preflight. 2 unit tests.
+- `wol.rs` — excluded from compilation (no `mod wol;`). Retained for future WoL spec. 4 tests (not compiled).
+
+---
+
+## Codebase Health
+
+- **0 TODO/FIXME/HACK comments** in source code
+- **0 `unimplemented!()` or `todo!()` macros**
+- **0 commented-out code blocks**
+- **0 stub/placeholder implementations**
+- **125 tests passing, 4 ignored (system-dependent network interface tests)**
+- **`unwrap()` in production:** 17 `Mutex::lock().unwrap()` calls in `tray.rs` (standard Rust practice for non-poisoned mutexes), 1 guarded `strip_prefix().unwrap()` in `tray.rs:268` (preceded by `starts_with` check), 5 `.expect()` calls at thread/icon creation. All other `unwrap` usage is `unwrap_or_default()` / `unwrap_or()` with fallback values.
+- **No hardcoded paths in runtime code:** All paths derive from `config::*` functions
 
 ---
 
@@ -73,6 +175,42 @@ lsof_recheck auto-switch independent of auto_failback, last_error on both-unreac
 ---
 
 ## Change Log
+
+### 2026-03-02 (v25 — P10 + P11.1 implementation)
+- **All P10 items implemented (P10.1–P10.6):**
+  - P10.1: `engine::open_handle_count()` public API + `dialogs::show_open_files_warning` pre-switch dialog with file count
+  - P10.2: Error dialogs (`UnmountFailed`/`MountFailed`) with descriptive messages and rollback status in `handle_switch_with_force`
+  - P10.3: `show_remove_favorite_dialog` now accepts `&[String]` alias names (not just count); dialog lists names
+  - P10.4: `dialogs::show_busy_shares_summary` dialog after Unmount All showing busy share names
+  - P10.5: Symlink health check at end of `reconcile_share` — recreates missing/broken symlinks for active shares
+  - P10.6: `auto_switch=false` path in `reconcile_share` detects newly-mounted shares and updates `active_backend` + creates symlink
+- **P11.1 implemented:** CLI `favorites remove` (non-cleanup) now reports dependent alias names with warning
+- **Compliance matrix updated:** All spec 05/06/08/14/15/17 gaps resolved
+- **125 tests, 0 failures, 4 ignored. Clippy clean. Fmt clean.**
+
+### 2026-03-02 (v24 — Deep audit with parallel verification agents)
+- Full independent re-audit of all 19 specs against all 16 source files using 10+ parallel Opus/Sonnet analysis agents.
+- **2 new gaps found:**
+  - P10.5 — `reconcile_share` does not recreate stable symlinks for already-healthy shares if deleted externally (spec 05 AC 4).
+  - P10.6 — `mount_all` (auto_switch=false) sets `active_backend=None` for newly-mounted shares; state self-corrects on next `reconcile_all` cycle (spec 08 AC 6).
+- **P12 scope significantly expanded:** From "10+ stale notes across 9 files" to **34 stale notes across 14 files**. Newly identified stale notes in specs 01 (4 notes), 02 (5 notes), 05 (1 note), 06 (1 note), 08 (3 notes), 11 (5 notes). Previously known: specs 03, 10, 12, 14, 15, 16, 17, 18, 19.
+- **Updated compliance matrix** to reflect P10.5 (spec 05) and P10.6 (spec 08) gaps.
+- **Spec 01 framework compliance verified:** `objc` crate qualifies as "lightweight macOS-native framework" — NOT GPUI, low footprint, direct AppKit bindings. No code change needed.
+- **Test count verified:** `cargo test` confirms 125 passed, 0 failed, 4 ignored.
+- **Codebase health audit expanded:** 0 TODO/FIXME/HACK, 0 todo!()/unimplemented!(), 0 commented-out code, 0 stubs, all unwrap() calls audited.
+- **P13 items re-verified:** All 3 confirmed (version mismatch 0.1.0 vs 0.2.0, missing build env vars, no app icon).
+
+### 2026-03-02 (v23 — Independent verification audit)
+- Full independent re-audit of all 19 specs against all 16 source files using parallel analysis agents.
+- Confirmed all P0–P9 items complete with 125 tests, 0 failures, 0 TODO/FIXME/HACK markers, 0 `todo!()`/`unimplemented!()` macros.
+- **New gap found:** P10.4 — Unmount All does not explicitly report busy shares to user (spec 17 AC 3).
+- **P12 scope expanded:** Stale spec notes exist across 10+ files (not just specs 14–19). Added specs 03, 10, 12.
+- Verified: config save IS atomic (temp+rename at `config.rs:180-185`), failover retry IS implemented (`engine.rs:272-296`), all CLI --force flags wired, `config set/show` complete.
+
+### 2026-03-02 (v22 — Comprehensive gap analysis)
+- Full spec-vs-code audit across all 19 specs and all 16 source files.
+- Identified 3 tray UI gaps (P10.1–P10.3), 1 CLI gap (P11.1), stale spec docs (P12), build script issues (P13).
+- Updated compliance matrix confirming P0–P9 completeness.
 
 ### 2026-03-02 (v21 — P9 spec compliance refinements)
 - **P9.1 [DONE]:** `tb_reachable_since` and `tb_healthy_since` added to `ShareStatus` per spec 09.

@@ -916,7 +916,67 @@ fn reconcile_share(
             }
         }
     } else {
-        state_entry_mut(state, &share.name).active_backend = active_backend;
+        // auto_switch=false path (mount_all / verify): detect if probe_backend mounted
+        // a previously-unmounted share and update state accordingly (spec 08 AC 6).
+        let entry = state_entry_mut(state, &share.name);
+        let probe_active = if tb.status.ready {
+            Some(Backend::Tb)
+        } else if fb.status.ready {
+            Some(Backend::Fallback)
+        } else {
+            None
+        };
+        if let (None, Some(new_backend)) = (entry.active_backend, probe_active) {
+            // probe_backend mounted a share that was previously unmounted
+            entry.active_backend = Some(new_backend);
+            entry.last_switch_at = Some(now);
+            log::info!(
+                "{}: mount_all detected new mount via {}",
+                share.name,
+                new_backend.short_label()
+            );
+            // Create stable symlink for newly-mounted share
+            let mount_point = config::volume_mount_path(&share.share_name);
+            if let Err(e) = set_symlink_atomically(&mount_point, &stable_path) {
+                log::error!(
+                    "{}: symlink creation after mount_all failed: {}",
+                    share.name,
+                    e
+                );
+            }
+        } else {
+            entry.active_backend = active_backend;
+        }
+    }
+
+    // P10.5: Validate stable symlink health for shares with an active backend.
+    // If the symlink is missing or broken, recreate it (spec 05 AC 4).
+    {
+        let current_active = state_entry_mut(state, &share.name).active_backend;
+        if current_active.is_some() {
+            let needs_repair = if stable_path.symlink_metadata().is_ok() {
+                // Symlink exists — check if it points to the right place
+                match std::fs::read_link(&stable_path) {
+                    Ok(target) => target != config::volume_mount_path(&share.share_name),
+                    Err(_) => true,
+                }
+            } else {
+                // Symlink missing
+                true
+            };
+            if needs_repair {
+                let mount_point = config::volume_mount_path(&share.share_name);
+                log::info!(
+                    "{}: recreating missing/broken stable symlink {} -> {}",
+                    share.name,
+                    stable_path.display(),
+                    mount_point.display()
+                );
+                if let Err(e) = set_symlink_atomically(&mount_point, &stable_path) {
+                    log::error!("{}: symlink repair failed: {}", share.name, e);
+                }
+            }
+        }
     }
 
     if last_error.is_none() {
@@ -1302,11 +1362,18 @@ fn path_eq(a: &Path, b: &Path) -> bool {
 }
 
 fn has_open_handles(path: &Path) -> bool {
+    open_handle_count(path) > 0
+}
+
+/// Count the number of open file handles on the given path using `lsof`.
+/// Returns 0 if no handles are open or if lsof fails.
+/// Used by the tray UI to show file count before switch (spec 14 AC 2).
+pub fn open_handle_count(path: &Path) -> usize {
     let output = Command::new("lsof").arg("+D").arg(path).output();
     match output {
         Ok(output) => {
             if output.stdout.is_empty() {
-                false
+                0
             } else {
                 // lsof header is 1 line; remaining lines are open handles
                 let count = output
@@ -1316,12 +1383,12 @@ fn has_open_handles(path: &Path) -> bool {
                     .count()
                     .saturating_sub(1);
                 log::info!("lsof: {} open handle(s) on {}", count, path.display());
-                true
+                count
             }
         }
         Err(e) => {
             log::warn!("lsof check failed on {}: {}", path.display(), e);
-            false
+            0
         }
     }
 }

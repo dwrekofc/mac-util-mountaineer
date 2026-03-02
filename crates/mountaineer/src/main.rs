@@ -482,7 +482,22 @@ fn cmd_favorites(command: FavoritesCommand) -> Result<()> {
                     );
                 }
             } else {
+                // P11.1: Report dependent aliases on non-cleanup remove (spec 06 AC 7)
+                let affected_aliases: Vec<String> = cfg
+                    .aliases
+                    .iter()
+                    .filter(|a| a.share.eq_ignore_ascii_case(&removed.name))
+                    .map(|a| a.name.clone())
+                    .collect();
                 println!("Removed '{}' from favorites.", removed.name);
+                if !affected_aliases.is_empty() {
+                    println!(
+                        "Warning: {} alias(es) still reference this share: {}",
+                        affected_aliases.len(),
+                        affected_aliases.join(", ")
+                    );
+                    println!("Consider removing or updating them with `mountaineer alias remove`.");
+                }
             }
 
             Ok(())
