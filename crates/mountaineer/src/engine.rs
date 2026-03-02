@@ -60,6 +60,10 @@ pub struct ShareStatus {
     pub fallback: BackendStatus,
     pub last_switch_at: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
+    /// When TB first became reachable (TCP 445 probe success). Per spec 09.
+    pub tb_reachable_since: Option<DateTime<Utc>>,
+    /// When TB was first both reachable AND successfully mounted. Per spec 09.
+    pub tb_healthy_since: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -936,6 +940,8 @@ fn reconcile_share(
         fallback: fb.status,
         last_switch_at: entry.last_switch_at,
         last_error: last_error.or_else(|| entry.last_error.clone()),
+        tb_reachable_since: entry.tb_reachable_since,
+        tb_healthy_since: entry.tb_healthy_since,
     }
 }
 
@@ -1760,6 +1766,8 @@ mod tests {
             },
             last_switch_at: None,
             last_error: None,
+            tb_reachable_since: None,
+            tb_healthy_since: None,
         };
         let output = StatusOutput {
             lsof_recheck: false,
@@ -1768,6 +1776,8 @@ mod tests {
         let json = serde_json::to_string_pretty(&output).unwrap();
         assert!(json.contains("\"lsof_recheck\": false"));
         assert!(json.contains("\"core\""));
+        assert!(json.contains("\"tb_reachable_since\""));
+        assert!(json.contains("\"tb_healthy_since\""));
     }
 
     // --- Symlink-related pure functions ---

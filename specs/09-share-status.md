@@ -31,7 +31,8 @@ Defines the per-share health and status data model that powers both CLI output a
 - `.planning/reqs-001.md` — JTBD 7, JTBD 8 (CLI status), State Model
 
 ## Notes
-- **`ShareStatus` struct** `[observed from code]`: The `ShareStatus` struct in `engine.rs` includes per-backend `BackendStatus` (host, mount_point, reachable, mounted, alive, ready, last_error), `desired_backend`, and `stable_path` — richer than what the spec enumerates. The spec requirements should be considered a minimum.
-- **`lsof_recheck` in status** `[observed from code]`: Since `lsof_recheck` is not yet in the config struct, it cannot appear in status output. This is a build task, not a spec gap.
-- **`tb_recovery_pending` not in `ShareStatus`** `[observed from code]`: The `ShareStatus` struct does not include `tb_recovery_pending`. The tray menu reads this from `RuntimeState` directly. For CLI `status --json` output, `tb_recovery_pending` should be included in the serialized status to surface "TB Ready" in JSON output. Currently it is absent from the JSON.
-- **`verify` vs `status` difference** `[observed from code]`: `verify_all` and `share_statuses` (used by `status`) both call the same `reconcile_share` with `attempt_mount=false, auto_switch=false`. They are functionally identical. The distinction exists only at the CLI level (different command names).
+- **`ShareStatus` struct** `[observed from code]`: The `ShareStatus` struct in `engine.rs` includes per-backend `BackendStatus` (host, mount_point, reachable, mounted, alive, ready, last_error), `desired_backend`, `stable_path`, `tb_reachable_since`, and `tb_healthy_since` — richer than the minimum spec requirements. All fields listed in the Requirements section are present.
+- **`lsof_recheck` in status** `[resolved]`: `lsof_recheck` is in `GlobalConfig` and exposed via `StatusOutput` wrapper in both `status --json` and `verify --json` output.
+- **`tb_recovery_pending` in `ShareStatus`** `[resolved]`: `tb_recovery_pending` is included in `ShareStatus` and appears in JSON output.
+- **`tb_reachable_since` and `tb_healthy_since`** `[resolved]`: Both timestamps are now surfaced in `ShareStatus` from `ShareRuntimeState`, appearing in JSON output.
+- **`verify` vs `status` difference** `[observed from code]`: Both `verify_all` and `verify_selected` call `reconcile_share` with `attempt_mount=false, auto_switch=false`. They are functionally identical to `status`. The distinction exists only at the CLI level (different command names).

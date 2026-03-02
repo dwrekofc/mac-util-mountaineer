@@ -542,7 +542,9 @@ fn handle_add_alias(state: &Arc<Mutex<TrayState>>, tray: &TrayIcon) {
         .unwrap_or_default();
 
     // Step 3: Name the alias
-    let input = match dialogs::show_add_alias_dialog(&share_name, &target_subpath) {
+    let alias_dir = config::shares_root_path(&cfg).join("Links");
+    let alias_dir_str = alias_dir.display().to_string();
+    let input = match dialogs::show_add_alias_dialog(&share_name, &target_subpath, &alias_dir_str) {
         Some(input) => input,
         None => return, // User cancelled
     };

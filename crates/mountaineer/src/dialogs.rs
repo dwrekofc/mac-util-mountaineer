@@ -382,20 +382,21 @@ pub fn show_folder_picker(root_path: &Path) -> Option<PathBuf> {
 ///
 /// Displays the share name and target subpath (read-only). The user enters an alias name.
 /// Returns `None` if cancelled.
-pub fn show_add_alias_dialog(share_name: &str, target_subpath: &str) -> Option<AddAliasInput> {
+pub fn show_add_alias_dialog(share_name: &str, target_subpath: &str, alias_dir: &str) -> Option<AddAliasInput> {
     unsafe {
         let alert: *mut Object = msg_send![class!(NSAlert), new];
         let _: () = msg_send![alert, setMessageText: nsstring("Create Alias")];
 
         let info = format!(
             "Create an alias for folder '{}' in share '{}'.\n\n\
-             The alias will be a symlink at ~/Shares/Links/<name>.",
+             The alias will be a symlink in {}.",
             if target_subpath.is_empty() {
                 "(root)"
             } else {
                 target_subpath
             },
-            share_name
+            share_name,
+            alias_dir
         );
         let _: () = msg_send![alert, setInformativeText: nsstring(&info)];
         // NSAlertStyleInformational = 1
